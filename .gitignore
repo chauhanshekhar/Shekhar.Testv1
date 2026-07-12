@@ -6,6 +6,14 @@ obj/
 .vs/
 TestResults/
 
+appsettings.Development.json
+
+*.user
+*.suo
+
+.env
+
+logs/
 # Never commit real secrets — use environment variables or secrets manager
 # appsettings.Production.json is a template with #{PLACEHOLDER}# tokens, safe to commit
 # appsettings.Development.json is safe (dev keys only)

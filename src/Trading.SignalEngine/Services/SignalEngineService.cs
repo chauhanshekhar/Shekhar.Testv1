@@ -170,13 +170,12 @@ public class SignalEngineService
         if (range <= 0)
             return null;
 
-        //var bodyPct =
-        //    Math.Abs(lastClosedCandle.Close - lastClosedCandle.Open)
-        //    / range * 100m;
+        var bodyPct =
+            Math.Abs(lastClosedCandle.Close - lastClosedCandle.Open)
+            / range * 100m;
 
-
-        //if (bodyPct < Settings.MinBodyPercent)
-        //    return null;
+        if (bodyPct < Settings.MinBodyPercent)
+            return null;
 
         var interval = (decimal)_instrumentCache.GetStrikeInterval(symbol);
         var spot = optionChain

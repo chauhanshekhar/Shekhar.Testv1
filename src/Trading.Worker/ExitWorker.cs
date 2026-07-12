@@ -346,10 +346,12 @@ public class ExitWorker : BackgroundService
 
 
 
-        // Accumulate scalar field changes across this evaluation and persist once at the
-        // end, instead of one SaveChangesAsync per update — reduces DB writes per signal
-        // per monitoring cycle. Order-placement saves (ClosePosition/HandlePartialExit)
-        // stay immediate since those must be durable before the broker call.
+        // Batch the excursion + trailing-SL updates into one save, and persist it BEFORE
+        // DetermineExitReason runs — that call can throw (e.g. from HandlePartialExit's
+        // DB lookups ahead of the broker call), and this scope's DbContext is discarded on
+        // the next cycle, so anything not saved yet would be silently lost rather than
+        // just delayed. Order-placement saves (ClosePosition/HandlePartialExit) stay
+        // immediate since those must be durable before the broker call.
         var hasChanges = false;
 
         hasChanges |= await UpdateExcursion(
@@ -364,7 +366,10 @@ public class ExitWorker : BackgroundService
             underlyingLtp,
             optionLtp);
 
-
+        if (hasChanges)
+        {
+            await uow.SaveChangesAsync();
+        }
 
 
         // save protection old values
@@ -395,10 +400,8 @@ public class ExitWorker : BackgroundService
 
         // save only protection changes
 
-        hasChanges |= signal.IndexT1Hit != oldIndexT1Hit ||
-                      signal.ProtectedSL != oldProtectedSL;
-
-        if (hasChanges)
+        if (signal.IndexT1Hit != oldIndexT1Hit ||
+            signal.ProtectedSL != oldProtectedSL)
         {
             await uow.SaveChangesAsync();
         }
