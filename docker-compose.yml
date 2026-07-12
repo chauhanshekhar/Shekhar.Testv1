@@ -1,0 +1,84 @@
+version: "3.9"
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: sqlserver
+
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Trading@123!"
+
+    ports:
+      - "1433:1433"
+
+    volumes:
+      - sqldata:/var/opt/mssql
+
+    restart: unless-stopped
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Trading@123!' -C -Q 'SELECT 1' || exit 1"
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+
+  trading-api:
+    build:
+      context: ./src
+      dockerfile: Trading.API/Dockerfile
+
+    container_name: trading-api
+
+    ports:
+      - "8080:8080"
+
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+
+      ConnectionStrings__DefaultConnection: >
+        Server=sqlserver;
+        Database=TradingDb;
+        User Id=sa;
+        Password=Trading@123!;
+        TrustServerCertificate=True;
+        Encrypt=False;
+
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+
+    restart: unless-stopped
+
+  trading-worker:
+    build:
+      context: ./src
+      dockerfile: Trading.Worker/Dockerfile
+
+    container_name: trading-worker
+
+    environment:
+      DOTNET_ENVIRONMENT: Production
+
+      ConnectionStrings__DefaultConnection: >
+        Server=sqlserver;
+        Database=TradingDb;
+        User Id=sa;
+        Password=Trading@123!;
+        TrustServerCertificate=True;
+        Encrypt=False;
+
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+
+    restart: unless-stopped
+
+volumes:
+  sqldata:

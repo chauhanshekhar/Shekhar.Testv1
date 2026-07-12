@@ -1,0 +1,37 @@
+@Trading.API_HostAddress = http://localhost:5111
+
+GET {{Trading.API_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
+### Angel One login
+POST https://localhost:5001/api/angel-one/login
+Content-Type: application/json
+
+{
+  "clientCode": "CLIENT_CODE",
+  "pin": "PIN",
+  "totp": "123456",
+  "state": "live"
+}
+
+### Angel One profile
+GET https://localhost:5001/api/angel-one/CLIENT_CODE/profile
+
+### Angel One feed connect
+POST https://localhost:5001/api/angel-one/CLIENT_CODE/feed/connect
+
+### Angel One subscribe feed
+POST https://localhost:5001/api/angel-one/feed/subscribe
+Content-Type: application/json
+
+{
+  "clientCode": "CLIENT_CODE",
+  "mode": 1,
+  "tokenList": [
+    {
+      "exchangeType": 1,
+      "tokens": ["26000", "26009"]
+    }
+  ]
+}

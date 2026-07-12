@@ -1,0 +1,48 @@
+using Trading.Application.Models;
+using Trading.Domain.Entities;
+
+namespace Trading.Application.Interfaces;
+
+public interface IOrderService
+{
+    TradingMode CurrentMode { get; }
+    /// <summary>
+    /// Places the entry order for a signal. signal.OrderReferenceId must already be set
+    /// (by the caller, before the Order row is inserted) — it's sent to Groww as-is so a
+    /// later GetOrderByReferenceAsync can recover an order whose placement response never
+    /// arrived. Throws GrowwOrderRejectedException on a definite rejection, or
+    /// GrowwOrderAmbiguousException on a timeout/network/5xx where Groww may have processed
+    /// the order anyway.
+    /// </summary>
+    Task<string> PlaceOrderAsync(
+        Signal signal);
+
+    Task<bool> CancelOrderAsync(
+        string orderId);
+
+    Task<bool> ModifyOrderAsync(
+        string orderId,
+        decimal price);
+
+    Task<List<string>> GetOpenOrdersAsync();
+
+    /// <summary>
+    /// Fetches the current broker status for a single order.
+    /// Returns null if the order cannot be found on the broker.
+    /// </summary>
+    Task<BrokerOrderStatus?> GetOrderStatusAsync(string brokerOrderId);
+
+    /// <summary>Closes an open position by placing the opposite order at market.</summary>
+    Task<string> ClosePositionAsync(Signal signal, string reason, int? lotsToClose = null);
+
+    /// <summary>Looks up an order by Groww's own order id — used once BrokerOrderId is known.</summary>
+    Task<OrderDetail?> GetOrderDetailAsync(string growwOrderId, string segment = "FNO");
+
+    /// <summary>
+    /// Looks up an order by OUR OrderReferenceId — used for reconciling an order whose
+    /// BrokerOrderId was never confirmed (timeout/network failure during placement).
+    /// </summary>
+    Task<OrderDetail?> GetOrderByReferenceAsync(string referenceId, string segment = "FNO");
+
+    Task<List<TradeDetail>> GetTradesForOrderAsync(string growwOrderId, string segment = "FNO", int page = 0, int pageSize = 20);
+}

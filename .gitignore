@@ -1,0 +1,36 @@
+# ── .NET ──────────────────────────────────────────────────────────────────
+bin/
+obj/
+*.user
+*.suo
+.vs/
+TestResults/
+
+# Never commit real secrets — use environment variables or secrets manager
+# appsettings.Production.json is a template with #{PLACEHOLDER}# tokens, safe to commit
+# appsettings.Development.json is safe (dev keys only)
+# The file below should be created locally and NEVER committed:
+appsettings.Local.json
+appsettings.*.Local.json
+secrets.json
+
+# ── Angular ───────────────────────────────────────────────────────────────
+src/Trading.Web/node_modules/
+src/Trading.Web/dist/
+src/Trading.Web/.angular/cache/
+src/Trading.Web/npm-debug.log
+src/Trading.Web/yarn-error.log
+src/Trading.Web/.sass-cache/
+src/Trading.Web/coverage/
+
+# environment.local.ts — create locally when you need to override dev settings
+src/Trading.Web/src/environments/environment.local.ts
+
+# ── Docker / deployment ───────────────────────────────────────────────────
+.env
+!.env.example
+
+# ── OS ────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.log
