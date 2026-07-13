@@ -69,45 +69,22 @@ public class EmaWorker : BackgroundService
         var emaService = scope.ServiceProvider.GetRequiredService<EmaService>();
         var uow = scope.ServiceProvider.GetRequiredService<Trading.Application.Interfaces.IUnitOfWork>();
 
-        var dayStart = IstClock.TodayStart;
-        var dayEnd = dayStart.AddDays(1);
-
         // EMA uses only _1m candles — using _5m as well would double-count periods.
         var sym1m = $"{symbol}_1m";
 
+        // Rolling window by candle count (not a calendar-day lookback), so EMA is
+        // available right after market open regardless of weekends/holidays.
+        // EMA math itself is untouched.
         var candles = await candleRepo.FindAsync(
-            c => c.Symbol == sym1m
-              && c.CandleTime >= dayStart
-              && c.CandleTime < dayEnd,
+            c => c.Symbol == sym1m && c.CandleTime.AddMinutes(1) <= IstClock.Now,
             q => q.OrderByDescending(c => c.CandleTime).Take(CandleCount));
 
         // Reverse to get chronological order for EMA calculation
         candles = candles.OrderBy(c => c.CandleTime).ToList();
 
-        // Early in the session there aren't enough same-day closes yet for EMA50 — pad the
-        // front of the series with the tail of the previous trading session's candles so
-        // EMA becomes available right after market open. EMA math itself is untouched.
-        if (candles.Count < CandleCount)
-        {
-            var needed = CandleCount - candles.Count;
-            var prevSessionStart = MarketHours.PreviousTradingSession(dayStart);
-            var prevSessionEnd = prevSessionStart.AddDays(1);
-
-            var prevCandles = await candleRepo.FindAsync(
-                c => c.Symbol == sym1m
-                  && c.CandleTime >= prevSessionStart
-                  && c.CandleTime < prevSessionEnd,
-                q => q.OrderByDescending(c => c.CandleTime).Take(needed));
-
-            candles = prevCandles
-                .OrderBy(c => c.CandleTime)
-                .Concat(candles)
-                .ToList();
-        }
-
         if (candles.Count < 51)
         {
-            _logger.LogDebug("EmaWorker {Symbol}: only {Count} candles including previous session — need 51", symbol, candles.Count);
+            _logger.LogDebug("EmaWorker {Symbol}: only {Count} closed candles available — need 51", symbol, candles.Count);
             return;
         }
 
