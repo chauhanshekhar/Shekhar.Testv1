@@ -13,6 +13,7 @@ internal static class SignalEngineExtensions
         services.AddScoped<EmaService>();
         services.AddScoped<RsiService>();
         services.AddScoped<AtrService>();
+        services.AddScoped<AtrRiskService>();
         services.AddScoped<OptionTargetService>();
         services.AddScoped<BacktestService>();
         services.AddScoped<PaperTradingService>();

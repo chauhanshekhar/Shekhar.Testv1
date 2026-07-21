@@ -23,4 +23,8 @@ public class StrategyContext
     /// doesn't carry the extra inputs (Ema20_5m/Ema50_5m/PriceChangePct/Candles5m) that scoring needs.
     /// </summary>
     public decimal HeroZeroTopScore { get; set; }
+
+    /// <summary>Computed once by StrategyManager via MarketClassificationService.</summary>
+    public MarketState MarketState { get; set; }
+    public string MarketStateReason { get; set; } = "";
 }

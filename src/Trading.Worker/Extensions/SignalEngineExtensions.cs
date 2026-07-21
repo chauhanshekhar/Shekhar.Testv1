@@ -14,9 +14,11 @@ internal static class SignalEngineExtensions
         services.AddScoped<EmaService>();
         services.AddScoped<RsiService>();
         services.AddScoped<AtrService>();
+        services.AddScoped<AtrRiskService>();
         services.AddScoped<OptionTargetService>();
         services.AddScoped<PcrService>();
         services.AddScoped<MarketRegimeService>();
+        services.AddScoped<MarketClassificationService>();
         services.AddScoped<OiAnalysisService>();
         services.AddScoped<TrendScoreService>();
         services.AddScoped<OiScoreService>();
@@ -27,10 +29,12 @@ internal static class SignalEngineExtensions
         services.AddScoped<HeroZeroScoreService>();
         services.AddScoped<StrikeRankingService>();
         services.AddScoped<StrategySelectorService>();
+        services.AddScoped<ExpiryMarketScoreService>();
         services.AddScoped<ExpiryScoreService>();
         services.AddScoped<ExpirySignalEngine>();
         services.AddScoped<SignalEngineService>();
         services.AddScoped<HeroZeroSignalEngine>();
+        services.AddScoped<AdaptiveLotSizingService>();
         services.AddScoped<StrategyManager>();
         services.AddScoped<HistoricalCandleService>();
         services.AddScoped<PortfolioService>();
@@ -41,6 +45,7 @@ internal static class SignalEngineExtensions
         services.AddSingleton<EventCalendarService>();
         services.AddSingleton<AppErrorLogger>();
         services.AddSingleton<SystemSettingsService>();
+        services.AddScoped<StrategyPerformanceService>();
         services.AddScoped<TradeCompletionService>();
         return services;
     }

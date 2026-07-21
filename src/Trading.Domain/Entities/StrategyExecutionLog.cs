@@ -6,6 +6,7 @@ public class StrategyExecutionLog
     public DateTime CreatedOn { get; set; }
     public string Symbol { get; set; } = "";
     public string SelectedStrategy { get; set; } = "";
+    public string MarketState { get; set; } = "";
     public string Reason { get; set; } = "";
     public decimal Score { get; set; }
 }

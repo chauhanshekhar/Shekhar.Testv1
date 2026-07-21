@@ -48,6 +48,12 @@ public class MarketRegimeService
 
     private const decimal GapPercent = 0.30m;
 
+    /// <summary>Per-symbol extreme-volatility ceiling, reused by MarketClassificationService.</summary>
+    public static decimal GetAtrMaxThreshold(string symbol) => AtrMaxThreshold.GetValueOrDefault(symbol, 20m);
+
+    /// <summary>Per-symbol "High" volatility floor, reused by ExpiryMarketScoreService's ATR band scoring.</summary>
+    public static decimal GetAtrThreshold(string symbol) => AtrThreshold.GetValueOrDefault(symbol, 5m);
+
     private readonly AtrService _atr;
 
     public MarketRegimeService(

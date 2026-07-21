@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Trading.Application.Interfaces;
 using Trading.Domain;
 using Trading.Domain.Entities;
 using Trading.Infrastructure;
@@ -12,20 +13,26 @@ public class SignalEngineService
 {
     private readonly IInstrumentCache _instrumentCache;
     private readonly SystemSettingsService _settingsService;
+    private readonly IStrategySettingsService _strategySettings;
     private readonly OptionTargetService _optionTargets;
+    private readonly AtrRiskService _atrRisk;
     private readonly IRepository<OptionChainData> _optionChainRepo;
     private readonly ILogger<SignalEngineService> _logger;
 
     public SignalEngineService(
         IInstrumentCache instrumentCache,
         SystemSettingsService settingsService,
+        IStrategySettingsService strategySettings,
         OptionTargetService optionTargets,
+        AtrRiskService atrRisk,
         IRepository<OptionChainData> optionChainRepo,
         ILogger<SignalEngineService> logger)
     {
         _instrumentCache = instrumentCache;
         _settingsService = settingsService;
+        _strategySettings = strategySettings;
         _optionTargets = optionTargets;
+        _atrRisk = atrRisk;
         _optionChainRepo = optionChainRepo;
         _logger = logger;
 
@@ -145,10 +152,34 @@ public class SignalEngineService
         decimal ema20_5m = 0,
         decimal ema50_5m = 0,
         Candle? lastClosedCandle = null)
+        => GenerateSignalDetailed(
+            symbol, ltp, ema20, ema50, pcr, rsi, currentVolume, avgVolume20,
+            priceChangePct, atrPct, atrRaw, optionChain, strategyHint,
+            ema20_5m, ema50_5m, lastClosedCandle).Signal;
+
+    // Same decision logic as GenerateSignal — additionally reports every failed condition
+    // (instead of a bare null) so callers can audit/log exactly why a signal did not fire.
+    public SignalGenerationResult GenerateSignalDetailed(
+        string symbol,
+        decimal ltp,
+        decimal ema20,
+        decimal ema50,
+        decimal pcr,
+        decimal rsi,
+        decimal currentVolume,
+        decimal avgVolume20,
+        decimal priceChangePct,
+        decimal atrPct,
+        decimal atrRaw = 0,
+        List<OptionChainData>? optionChain = null,
+        string strategyHint = TradingConst.StrategyType.Auto,
+        decimal ema20_5m = 0,
+        decimal ema50_5m = 0,
+        Candle? lastClosedCandle = null)
     {
         // No chain data = no delta confirmation = no signal.
         if (optionChain == null || optionChain.Count == 0)
-            return null;
+            return SignalGenerationResult.Failed("No option chain data available");
 
         // ATR% filter — suppress signals in low-volatility/sideways markets.
         // Threshold is instrument-specific since indices differ in volatility.
@@ -156,26 +187,26 @@ public class SignalEngineService
     ? atrRaw / ltp * 100m
     : 0m;
 
-        var minAtr = Settings.MinAtrPercent.GetValueOrDefault(symbol, 0.10m);
+        var minAtr = _strategySettings.GetDecimal("MinAtrPercent", symbol, 0.10m);
 
         if (atrPct < minAtr)
-            return null;
+            return SignalGenerationResult.Failed($"ATR% {atrPct:F2} below minimum {minAtr:F2}");
         if (lastClosedCandle == null)
-            return null;
+            return SignalGenerationResult.Failed("No closed 5m candle available");
 
         var range =
             lastClosedCandle.High -
             lastClosedCandle.Low;
 
         if (range <= 0)
-            return null;
+            return SignalGenerationResult.Failed("Candle range invalid (High <= Low)");
 
         var bodyPct =
             Math.Abs(lastClosedCandle.Close - lastClosedCandle.Open)
             / range * 100m;
 
         if (bodyPct < Settings.MinBodyPercent)
-            return null;
+            return SignalGenerationResult.Failed($"Candle body {bodyPct:F1}% below minimum {Settings.MinBodyPercent}%");
 
         var interval = (decimal)_instrumentCache.GetStrikeInterval(symbol);
         var spot = optionChain
@@ -212,7 +243,7 @@ public class SignalEngineService
             .FirstOrDefault();
 
         if (atmCe == null || atmPe == null)
-            return null;
+            return SignalGenerationResult.Failed("No liquid ATM CE/PE strikes found");
 
         var ceAtmDelta = atmCe.Delta;
         var peAtmDelta = atmPe.Delta;
@@ -277,32 +308,102 @@ public class SignalEngineService
             lastClosedCandle.Close < lastClosedCandle.Open;
         var volConfirmed = currentVolume > avgVolume20 * 1.5m;
         // ── Entry: 1m timing + 5m trend alignment + candle strength ──────────
+        // Each sub-condition is named below (same operands/thresholds, just factored out of the
+        // single boolean expression) purely so a rejection can report exactly which ones failed —
+        // the values of `call`/`put` themselves are unchanged.
+        bool condTrendBullish = trendBullish;
+        bool condLtpAboveEma20 = ltp > ema20;
+        bool condEma20AboveEma50 = ema20 > ema50;
+        bool condPcrCall = pcr >= 1.05m;
+        bool condRsiCall = rsi > 55m && rsi < 75m;
+        bool condDeltaCall = ceAtmDelta >= 0.40m;
+        bool condVolumeCall = volConfirmed;
+        bool condPriceChangeCall = priceChangePct > 0.15m;
+        bool condCandleBullish = candleBullish;
+
         bool call =
-     trendBullish &&
-     ltp > ema20 &&
-     ema20 > ema50 &&
-     pcr >= 1.05m &&
-     rsi > 55m &&
-     rsi < 75m &&
-     ceAtmDelta >= 0.40m &&
-     volConfirmed &&
-     priceChangePct > 0.15m &&
-     candleBullish;
+     condTrendBullish &&
+     condLtpAboveEma20 &&
+     condEma20AboveEma50 &&
+     condPcrCall &&
+     condRsiCall &&
+     condDeltaCall &&
+     condVolumeCall &&
+     condPriceChangeCall &&
+     condCandleBullish;
+
+        bool condTrendBearish = trendBearish;
+        bool condLtpBelowEma20 = ltp < ema20;
+        bool condEma20BelowEma50 = ema20 < ema50;
+        bool condPcrPut = pcr <= 0.95m;
+        bool condRsiPut = rsi < 45m && rsi > 30m;
+        bool condDeltaPut = peAtmDelta <= -0.40m;
+        bool condVolumePut = volConfirmed;
+        bool condPriceChangePut = priceChangePct < -0.15m;
+        bool condCandleBearish = candleBearish;
 
         bool put =
-            trendBearish &&
-            ltp < ema20 &&
-            ema20 < ema50 &&
-            pcr <= 0.95m &&
-            rsi < 45m &&
-            rsi > 30m &&
-            peAtmDelta <= -0.40m &&
-            volConfirmed &&
-            priceChangePct < -0.15m &&
-            candleBearish;
-        if (!call && !put)
-            return null;
+            condTrendBearish &&
+            condLtpBelowEma20 &&
+            condEma20BelowEma50 &&
+            condPcrPut &&
+            condRsiPut &&
+            condDeltaPut &&
+            condVolumePut &&
+            condPriceChangePut &&
+            condCandleBearish;
 
+        if (!call && !put)
+        {
+            var callChecks = new (string Label, bool Passed)[]
+            {
+                ("Trend Bullish", condTrendBullish),
+                ("LTP > EMA20", condLtpAboveEma20),
+                ("EMA20 > EMA50", condEma20AboveEma50),
+                ("PCR >= 1.05", condPcrCall),
+                ("RSI in (55,75)", condRsiCall),
+                ("CE Delta >= 0.40", condDeltaCall),
+                ("Volume confirmed", condVolumeCall),
+                ("PriceChangePct > 0.15", condPriceChangeCall),
+                ("Candle bullish", condCandleBullish),
+            };
+            var putChecks = new (string Label, bool Passed)[]
+            {
+                ("Trend Bearish", condTrendBearish),
+                ("LTP < EMA20", condLtpBelowEma20),
+                ("EMA20 < EMA50", condEma20BelowEma50),
+                ("PCR <= 0.95", condPcrPut),
+                ("RSI in (30,45)", condRsiPut),
+                ("PE Delta <= -0.40", condDeltaPut),
+                ("Volume confirmed", condVolumePut),
+                ("PriceChangePct < -0.15", condPriceChangePut),
+                ("Candle bearish", condCandleBearish),
+            };
+
+            var failureReasons = callChecks.Where(c => !c.Passed).Select(c => $"CALL: {c.Label}")
+                .Concat(putChecks.Where(c => !c.Passed).Select(c => $"PUT: {c.Label}"))
+                .ToList();
+
+            _logger.LogInformation(
+                "Signal rejected for {Symbol}\nFailed conditions:\n{CallChecklist}\n{PutChecklist}\nRejected because:\n{Reasons}",
+                symbol,
+                FormatChecklist(callChecks),
+                FormatChecklist(putChecks),
+                string.Join(Environment.NewLine, failureReasons));
+
+            return SignalGenerationResult.Failed(failureReasons);
+        }
+        _logger.LogInformation(
+    "Signal Check: Symbol={Symbol}, RSI={Rsi}, PCR={Pcr}, Delta={Delta}, TrendBullish={TrendBullish}, TrendBearish={TrendBearish}, Vol={VolConfirmed}, CandleBullish={CandleBullish}, CandleBearish={CandleBearish}",
+    symbol,
+    rsi,
+    pcr,
+    ceAtmDelta,
+    trendBullish,
+    trendBearish,
+    volConfirmed,
+    candleBullish,
+    candleBearish);
         var optionType = call ? TradingConst.OptionType.CE : TradingConst.OptionType.PE;
 
         // Single lookup — LTP + TradingSymbol from chain
@@ -318,19 +419,13 @@ public class SignalEngineService
 
         // No valid premium — chain data stale or strike not found. Block signal.
         if (optionLtp <= 0)
-            return null;
+            return SignalGenerationResult.Failed("Stale/zero option premium for selected leg");
 
         // Prefer Groww's TradingSymbol; fall back to constructed name
         var optionSymbol = (chainLeg != null && !string.IsNullOrWhiteSpace(chainLeg.TradingSymbol))
             ? chainLeg.TradingSymbol
             : $"{symbol}{IstClock.Now:yyMMM}{(int)atmStrike}{optionType}".ToUpper();
 
-        // ATR-based SL: at least 1.5× ATR to avoid being stopped by normal candle noise.
-        // Falls back to fixed minimum when ATR is not available.
-        decimal fixedMin = _instrumentCache.GetIndexStopPoints(symbol);
-        decimal slPoints = atrRaw > 0
-            ? Math.Max(fixedMin, Math.Round(atrRaw * Settings.AtrSlMultiplier, 0))
-            : fixedMin;
         var confidence = ComputeConfidence(call, ema20, ema50, ltp, pcr, rsi, currentVolume, avgVolume20, bodyPct);
 
         var vega = chainLeg?.Vega ?? 0m;
@@ -342,25 +437,13 @@ public class SignalEngineService
 
         // ── Build Signal using SignalBuilder ──────────────────────────────────
         // Buy()/Sell() MUST be called before WithIndexStops() — stops depend on direction.
-        decimal sl;
-        decimal t1;
-        decimal t2;
+        var risk = _atrRisk.CalculateIndexRisk(symbol, ltp, atrRaw, call, Settings);
+        decimal sl = risk.StopLoss;
+        decimal t1 = risk.Target1;
+        decimal t2 = risk.Target2;
 
-        if (call)
-        {
-            sl = ltp - slPoints;
-
-            // realistic intraday move
-            t1 = ltp + atrRaw;
-            t2 = ltp + (atrRaw * 2);
-        }
-        else
-        {
-            sl = ltp + slPoints;
-
-            t1 = ltp - atrRaw;
-            t2 = ltp - (atrRaw * 2);
-        }
+        // Distance-only reuse below (option-target fallback) — unchanged from before.
+        decimal slPoints = Math.Abs(ltp - sl);
 
 
         // ===============================
@@ -445,6 +528,9 @@ public class SignalEngineService
             .WithConfidence(confidence);
 
 
-        return builder.Build();
+        return SignalGenerationResult.Success(builder.Build());
     }
+
+    private static string FormatChecklist(IEnumerable<(string Label, bool Passed)> items) =>
+        string.Join(Environment.NewLine, items.Select(i => $"{(i.Passed ? "✓" : "✗")} {i.Label}"));
 }

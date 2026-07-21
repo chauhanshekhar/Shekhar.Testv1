@@ -23,12 +23,21 @@ public record MarketSnapshot(
     decimal CurrentVolume,
     decimal AvgVolume20,
     decimal PriceChangePct,
+    decimal Vwap,
     decimal PcrValue,
     string  StrategyHint,
     EconomicEvent? NewsEvent,
     TimeSpan LastTickAge,
     TimeSpan LastOptionChainAge,
-    Candle? LastClosed5mCandle);
+    Candle? LastClosed5mCandle)
+{
+    /// <summary>
+    /// Audit-only diagnostic row for this cycle — populated here, finished (MarketState/
+    /// StrategySelected/Confidence/BlockedBy/BlockedReason) and saved once by SignalWorker.
+    /// Never read by trading logic.
+    /// </summary>
+    public IndicatorSnapshot? Audit { get; init; }
+}
 
 public static class MarketSnapshotBuilder
 {
@@ -144,6 +153,11 @@ public static class MarketSnapshotBuilder
         var dayOpen = todayCandles.First().Open;
         var priceChangePct = dayOpen > 0 ? (ltp - dayOpen) / dayOpen * 100m : 0m;
 
+        // ── VWAP — cumulative from today's session open, typical price weighted by volume ────
+        var cumulativePriceVolume = todayCandles.Sum(c => (c.High + c.Low + c.Close) / 3m * c.Volume);
+        var cumulativeVolume = todayCandles.Sum(c => c.Volume);
+        var vwap = cumulativeVolume > 0 ? cumulativePriceVolume / cumulativeVolume : ltp;
+
         // ── Option chain ──────────────────────────────────────────────────────
         var chainCutoff = IstClock.Now.AddMinutes(-30);
         var fullChainRows = await ctx.OptionRepo.FindAsync(
@@ -190,6 +204,35 @@ public static class MarketSnapshotBuilder
         var newsEvent = ctx.EventCalendar.GetFireableNewsEvent(upcomingEvents);
         var strategyHint = TradingConst.StrategyType.Auto;
 
+        // ── Audit snapshot (Market Snapshot Audit feature) ─────────────────────
+        // Debugging/analytics only — built from indicators already computed above,
+        // no extra queries. Not saved here; SignalWorker finishes and persists it once.
+        var volumeRatio = avgVolume20 > 0 ? currentVolume / avgVolume20 : 0m;
+        var trendDirection = ema20 > ema50 ? "Bullish" : ema20 < ema50 ? "Bearish" : "Sideways";
+        var audit = new IndicatorSnapshot
+        {
+            SnapshotTime = IstClock.Now,
+            Symbol = ctx.Symbol,
+            Ltp = ltp,
+            DayOpen = dayOpen,
+            YesterdayClose = yesterdayClose,
+            Ema20 = ema20,
+            Ema50 = ema50,
+            Ema20_5m = ema20_5m,
+            Ema50_5m = ema50_5m,
+            Rsi = rsi,
+            AtrRaw = atrRaw,
+            AtrPct = atrPct,
+            Pcr = pcrValue,
+            Vwap = vwap,
+            CurrentVolume = currentVolume,
+            AvgVolume20 = avgVolume20,
+            VolumeRatio = volumeRatio,
+            PriceChangePct = priceChangePct,
+            TrendDirection = trendDirection,
+            MarketRegime = $"{marketRegime.Trend}/{marketRegime.Volatility}",
+        };
+
         return new MarketSnapshot(
             Candles1m: indicatorCandles,
             Candles5m: indicatorCandles5m,
@@ -208,12 +251,16 @@ public static class MarketSnapshotBuilder
             CurrentVolume: currentVolume,
             AvgVolume20: avgVolume20,
             PriceChangePct: priceChangePct,
+            Vwap: vwap,
             PcrValue: pcrValue,
             StrategyHint: strategyHint,
             NewsEvent: newsEvent,
             LastTickAge: lastTickAge,
             LastOptionChainAge: lastOptionChainAge,
-            LastClosed5mCandle: todayCandles5m.Count > 0 ? todayCandles5m[^1] : null);
+            LastClosed5mCandle: todayCandles5m.Count > 0 ? todayCandles5m[^1] : null)
+        {
+            Audit = audit
+        };
     }
     //public static async Task<MarketSnapshot?> BuildAsync(SignalContext ctx)
     //{

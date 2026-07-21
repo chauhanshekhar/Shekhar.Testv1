@@ -374,6 +374,132 @@ namespace Trading.Infrastructure.Migrations
                     b.ToTable("HeroZeroScores");
                 });
 
+            modelBuilder.Entity("Trading.Domain.Entities.IndicatorSnapshot", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<decimal>("AtrPct")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("AtrRaw")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("AvgVolume20")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("BlockedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("BlockedReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<decimal>("Confidence")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime>("CreatedOn")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("CurrentVolume")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("DayOpen")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("Ema20")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("Ema20_5m")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("Ema50")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("Ema50_5m")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("Ltp")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("MarketRegime")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("MarketState")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<decimal>("Pcr")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("PriceChangePct")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("Rsi")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<bool>("SignalGenerated")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime>("SnapshotTime")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("StrategySelected")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("Symbol")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("TrendDirection")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<decimal>("VolumeRatio")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("Vwap")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("YesterdayClose")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Symbol", "SnapshotTime")
+                        .HasDatabaseName("IX_IndicatorSnapshot_Symbol_SnapshotTime");
+
+                    b.ToTable("IndicatorSnapshots");
+                });
+
             modelBuilder.Entity("Trading.Domain.Entities.MarketTick", b =>
                 {
                     b.Property<long>("Id")
@@ -830,6 +956,10 @@ namespace Trading.Infrastructure.Migrations
                         .HasPrecision(9, 4)
                         .HasColumnType("decimal(9,4)");
 
+                    b.Property<decimal>("AtrRawAtEntry")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
                     b.Property<string>("BrokerOrderId")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
@@ -872,6 +1002,9 @@ namespace Trading.Infrastructure.Migrations
                     b.Property<bool>("IndexT1Hit")
                         .HasColumnType("bit");
 
+                    b.Property<bool>("IsExpiryDay")
+                        .HasColumnType("bit");
+
                     b.Property<DateTime?>("LastOrderSyncTime")
                         .HasColumnType("datetime2");
 
@@ -900,6 +1033,13 @@ namespace Trading.Infrastructure.Migrations
                     b.Property<decimal>("MaePrice")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("MarketState")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)")
+                        .HasDefaultValue("");
 
                     b.Property<decimal>("MfePrice")
                         .HasPrecision(18, 2)
@@ -951,6 +1091,13 @@ namespace Trading.Infrastructure.Migrations
 
                     b.Property<decimal>("RsiAtEntry")
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("SelectedStrategy")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasDefaultValue("");
 
                     b.Property<string>("SignalType")
                         .IsRequired()
@@ -1094,6 +1241,11 @@ namespace Trading.Infrastructure.Migrations
                     b.Property<DateTime>("CreatedOn")
                         .HasColumnType("datetime2");
 
+                    b.Property<string>("MarketState")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
                     b.Property<string>("Reason")
                         .IsRequired()
                         .HasMaxLength(500)
@@ -1119,6 +1271,123 @@ namespace Trading.Infrastructure.Migrations
                         .HasDatabaseName("IX_StrategyExecutionLog_Symbol_CreatedOn");
 
                     b.ToTable("StrategyExecutionLogs");
+                });
+
+            modelBuilder.Entity("Trading.Domain.Entities.StrategyPerformance", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<decimal>("AverageLoss")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("AverageWin")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("Expectancy")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<bool>("Expiry")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("Hour")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("LastUpdated")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("Losses")
+                        .HasColumnType("int");
+
+                    b.Property<string>("MarketState")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<decimal>("MaxDrawdown")
+                        .HasPrecision(9, 4)
+                        .HasColumnType("decimal(9,4)");
+
+                    b.Property<decimal>("NetPnL")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("ProfitFactor")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<string>("Strategy")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<int>("Trades")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("WinRate")
+                        .HasPrecision(9, 4)
+                        .HasColumnType("decimal(9,4)");
+
+                    b.Property<int>("Wins")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Strategy", "MarketState", "Expiry", "Hour")
+                        .IsUnique()
+                        .HasDatabaseName("IX_StrategyPerformance_Bucket");
+
+                    b.ToTable("StrategyPerformances");
+                });
+
+            modelBuilder.Entity("Trading.Domain.Entities.StrategySetting", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("SettingKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<decimal>("SettingValue")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<string>("Symbol")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<DateTime>("UpdatedOn")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IsActive")
+                        .HasDatabaseName("IX_StrategySetting_IsActive");
+
+                    b.HasIndex("SettingKey", "Symbol")
+                        .IsUnique()
+                        .HasDatabaseName("IX_StrategySetting_SettingKey_Symbol")
+                        .HasFilter("[Symbol] IS NOT NULL");
+
+                    b.ToTable("StrategySettings");
                 });
 
             modelBuilder.Entity("Trading.Domain.Entities.SubscriptionPlan", b =>
@@ -1232,6 +1501,9 @@ namespace Trading.Infrastructure.Migrations
                     b.Property<decimal>("DeltaAtEntry")
                         .HasColumnType("decimal(18,2)");
 
+                    b.Property<int>("EntryHour")
+                        .HasColumnType("int");
+
                     b.Property<long?>("EntryOrderId")
                         .HasColumnType("bigint");
 
@@ -1250,8 +1522,18 @@ namespace Trading.Infrastructure.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
 
+                    b.Property<bool>("IsExpiryDay")
+                        .HasColumnType("bit");
+
                     b.Property<bool>("IsPartial")
                         .HasColumnType("bit");
+
+                    b.Property<string>("MarketState")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)")
+                        .HasDefaultValue("");
 
                     b.Property<decimal>("PcrAtEntry")
                         .HasColumnType("decimal(18,2)");
@@ -1269,6 +1551,13 @@ namespace Trading.Infrastructure.Migrations
 
                     b.Property<decimal>("RsiAtEntry")
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("SelectedStrategy")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasDefaultValue("");
 
                     b.Property<decimal>("SignalConfidence")
                         .HasColumnType("decimal(18,2)");
@@ -1346,6 +1635,65 @@ namespace Trading.Infrastructure.Migrations
                         .HasDatabaseName("IX_TradingInstrument_Symbol");
 
                     b.ToTable("TradingInstruments");
+                });
+
+            modelBuilder.Entity("Trading.Domain.Entities.TrailingStopLog", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<decimal>("AtrRaw")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<DateTime>("CreatedOn")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("Delta")
+                        .HasPrecision(10, 6)
+                        .HasColumnType("decimal(10,6)");
+
+                    b.Property<decimal>("MaxStep")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("MfePrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("NewOptionSL")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("OldOptionSL")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("OptionAtrDistance")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<long>("SignalId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Symbol")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<decimal>("TargetSL")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SignalId", "CreatedOn")
+                        .HasDatabaseName("IX_TrailingStopLog_SignalId_CreatedOn");
+
+                    b.ToTable("TrailingStopLogs");
                 });
 
             modelBuilder.Entity("Trading.Domain.Entities.User", b =>

@@ -1,5 +1,6 @@
 using Trading.Domain;
 using Trading.Domain.Entities;
+using Trading.Infrastructure;
 using Trading.SignalEngine.Scoring.Services;
 
 namespace Trading.SignalEngine.Strategies.Expiry;
@@ -8,6 +9,9 @@ namespace Trading.SignalEngine.Strategies.Expiry;
 /// Scores every CE and PE for expiry day. Reuses TrendScoreService/VolumeScoreService/
 /// MomentumScoreService (rescaled via their maxScore param) — only Gamma and OI Shift
 /// are expiry-specific, since neither fits the existing Hero Zero scorers' shape.
+/// Also reuses GreeksScoreService/LiquidityScoreService (same ones HeroZero uses) for the
+/// Option Score's Greeks/Liquidity components, and the new ExpiryMarketScoreService for the
+/// index-level Market Score — see ExpiryStrikeScore.MarketScore/OptionScore/TotalScore.
 /// </summary>
 public class ExpiryScoreService
 {
@@ -19,15 +23,24 @@ public class ExpiryScoreService
     private readonly TrendScoreService _trend;
     private readonly MomentumScoreService _momentum;
     private readonly VolumeScoreService _volume;
+    private readonly GreeksScoreService _greeks;
+    private readonly LiquidityScoreService _liquidity;
+    private readonly ExpiryMarketScoreService _market;
 
     public ExpiryScoreService(
         TrendScoreService trend,
         MomentumScoreService momentum,
-        VolumeScoreService volume)
+        VolumeScoreService volume,
+        GreeksScoreService greeks,
+        LiquidityScoreService liquidity,
+        ExpiryMarketScoreService market)
     {
         _trend = trend;
         _momentum = momentum;
         _volume = volume;
+        _greeks = greeks;
+        _liquidity = liquidity;
+        _market = market;
     }
 
     public (List<ExpiryStrikeScore> CeScores, List<ExpiryStrikeScore> PeScores) Score(
@@ -38,7 +51,13 @@ public class ExpiryScoreService
         decimal ema20_5m,
         decimal ema50_5m,
         decimal priceChangePct,
-        List<Candle> candles5m)
+        List<Candle> candles5m,
+        decimal rsi,
+        decimal pcrValue,
+        decimal atrRaw,
+        decimal currentVolume,
+        decimal avgVolume20,
+        TradingSettings settings)
     {
         var ceRows = chain.Where(o => o.OptionType == TradingConst.OptionType.CE).ToList();
         var peRows = chain.Where(o => o.OptionType == TradingConst.OptionType.PE).ToList();
@@ -49,8 +68,10 @@ public class ExpiryScoreService
         var totalPeOiChange = peRows.Sum(o => o.ChangeInOi);
 
         return (
-            ScoreSide(symbol, ceRows, true, ema20, ema50, ema20_5m, ema50_5m, priceChangePct, candles5m, totalCeOiChange, totalPeOiChange),
-            ScoreSide(symbol, peRows, false, ema20, ema50, ema20_5m, ema50_5m, priceChangePct, candles5m, totalCeOiChange, totalPeOiChange));
+            ScoreSide(symbol, ceRows, true, ema20, ema50, ema20_5m, ema50_5m, priceChangePct, candles5m,
+                totalCeOiChange, totalPeOiChange, rsi, pcrValue, atrRaw, currentVolume, avgVolume20, settings),
+            ScoreSide(symbol, peRows, false, ema20, ema50, ema20_5m, ema50_5m, priceChangePct, candles5m,
+                totalCeOiChange, totalPeOiChange, rsi, pcrValue, atrRaw, currentVolume, avgVolume20, settings));
     }
 
     private List<ExpiryStrikeScore> ScoreSide(
@@ -64,7 +85,13 @@ public class ExpiryScoreService
         decimal priceChangePct,
         List<Candle> candles5m,
         long totalCeOiChange,
-        long totalPeOiChange)
+        long totalPeOiChange,
+        decimal rsi,
+        decimal pcrValue,
+        decimal atrRaw,
+        decimal currentVolume,
+        decimal avgVolume20,
+        TradingSettings settings)
     {
         if (rows.Count == 0)
             return [];
@@ -72,9 +99,15 @@ public class ExpiryScoreService
         var sortedVolumes = rows.Select(o => o.Volume).OrderBy(v => v).ToList();
         var medianVolume = Median(sortedVolumes);
         var meanGamma = rows.Average(o => o.Gamma);
+        var meanAbsTheta = rows.Average(o => Math.Abs(o.Theta));
 
         var oiShiftScore = ScoreOiShift(isCall, totalCeOiChange, totalPeOiChange);
         var premiumMomentumScore = _momentum.Score(isCall, priceChangePct, candles5m);
+
+        // Index-level — same for every strike of this side this cycle.
+        var marketScore = _market.Score(
+            symbol, isCall, ema20, ema50, ema20_5m, ema50_5m, rsi, pcrValue, atrRaw,
+            currentVolume, avgVolume20, priceChangePct);
 
         return rows.Select(o => new ExpiryStrikeScore
         {
@@ -89,7 +122,18 @@ public class ExpiryScoreService
             VolumeScore = _volume.Score(o.Volume, medianVolume, Percentile(sortedVolumes, o.Volume), VolumeMax),
             GammaScore = ScoreGamma(o.Gamma, meanGamma),
             OiShiftScore = oiShiftScore,
-            PremiumMomentumScore = premiumMomentumScore
+            PremiumMomentumScore = premiumMomentumScore,
+
+            GreeksScore = _greeks.Score(o.Delta, o.Gamma, o.Theta, meanGamma, meanAbsTheta),
+            LiquidityScore = _liquidity.Score(symbol, o, settings),
+
+            EmaTrendScore = marketScore.EmaTrendScore,
+            Ema5TrendScore = marketScore.Ema5TrendScore,
+            RsiScore = marketScore.RsiScore,
+            PcrScore = marketScore.PcrScore,
+            AtrScore = marketScore.AtrScore,
+            MarketVolumeScore = marketScore.MarketVolumeScore,
+            PriceChangeScore = marketScore.PriceChangeScore
         }).ToList();
     }
 

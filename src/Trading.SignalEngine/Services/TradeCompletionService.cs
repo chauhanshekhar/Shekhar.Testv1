@@ -14,6 +14,7 @@ namespace Trading.SignalEngine.Services;
     private readonly IRepository<SignalOutcome> _outcomeRepo;
     private readonly IRepository<OptionChainData> _optionRepo;
     private readonly IInstrumentCache _instruments;
+    private readonly StrategyPerformanceService _strategyPerformance;
     private readonly IUnitOfWork _uow;
 
 
@@ -24,6 +25,7 @@ namespace Trading.SignalEngine.Services;
         IRepository<SignalOutcome> outcomeRepo,
         IRepository<OptionChainData> optionRepo,
         IInstrumentCache instruments,
+        StrategyPerformanceService strategyPerformance,
         IUnitOfWork uow)
     {
         _journalRepo = journalRepo;
@@ -32,6 +34,7 @@ namespace Trading.SignalEngine.Services;
         _outcomeRepo = outcomeRepo;
         _optionRepo = optionRepo;
         _instruments = instruments;
+        _strategyPerformance = strategyPerformance;
         _uow = uow;
     }
 
@@ -76,8 +79,7 @@ namespace Trading.SignalEngine.Services;
             * lotSize;
 
 
-        await _journalRepo.AddAsync(
-        new TradeJournal
+        var journal = new TradeJournal
         {
             Symbol = signal.Symbol,
 
@@ -130,8 +132,22 @@ namespace Trading.SignalEngine.Services;
             signal.DeltaAtEntry,
 
             ChangeInOiAtEntry =
-            signal.ChangeInOiAtEntry
-        });
+            signal.ChangeInOiAtEntry,
+
+            SelectedStrategy =
+            signal.SelectedStrategy,
+
+            MarketState =
+            signal.MarketState,
+
+            IsExpiryDay =
+            signal.IsExpiryDay,
+
+            EntryHour =
+            signal.CreatedOn.Hour
+        };
+
+        await _journalRepo.AddAsync(journal);
 
 
 
@@ -200,6 +216,8 @@ namespace Trading.SignalEngine.Services;
 
 
         await _uow.SaveChangesAsync();
+
+        await _strategyPerformance.RecordCompletedTradeAsync(journal);
     }
     public decimal ComputeLeg2Pnl(
     Signal signal,

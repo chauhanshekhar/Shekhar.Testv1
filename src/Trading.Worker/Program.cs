@@ -17,5 +17,6 @@ builder.Services
 var host = builder.Build();
 
 await host.Services.GetRequiredService<IInstrumentCache>().ReloadAsync();
+await host.Services.GetRequiredService<IStrategySettingsService>().ReloadAsync();
 
 host.Run();

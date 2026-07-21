@@ -34,4 +34,10 @@ public class TradeJournal
     public decimal PcrAtEntry        { get; set; }
     public decimal DeltaAtEntry      { get; set; }
     public decimal ChangeInOiAtEntry { get; set; }
+
+    // Strategy/market context at entry — for StrategyPerformance bucketing.
+    public string SelectedStrategy { get; set; } = "";
+    public string MarketState { get; set; } = "";
+    public bool IsExpiryDay { get; set; }
+    public int EntryHour { get; set; }
 }

@@ -36,6 +36,7 @@ public record SignalContext(
     IInstrumentCache Instruments,
     SystemSettingsService SystemSettings,
     IRuntimeSettingsService RuntimeSettings,
+    IStrategySettingsService StrategySettings,
     IServiceProvider? ServiceProvider = null)
 {
     /// <summary>
@@ -87,5 +88,6 @@ public record SignalContext(
             Instruments: sp.GetRequiredService<IInstrumentCache>(),
             SystemSettings: svc,
             RuntimeSettings: sp.GetRequiredService<IRuntimeSettingsService>(),
+            StrategySettings: sp.GetRequiredService<IStrategySettingsService>(),
             ServiceProvider: sp);
 }

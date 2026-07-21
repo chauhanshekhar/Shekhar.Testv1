@@ -33,6 +33,7 @@ if (app.Environment.IsDevelopment() || cfg.GetValue<bool>("Database:AutoMigrate"
 }
 
 await app.Services.GetRequiredService<IInstrumentCache>().ReloadAsync();
+await app.Services.GetRequiredService<IStrategySettingsService>().ReloadAsync();
 
 app.UseSwaggerUi(cfg);
 app.MapGet("/", () => Results.Redirect("/swagger/index.html"));

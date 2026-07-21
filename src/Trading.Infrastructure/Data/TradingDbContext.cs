@@ -30,6 +30,10 @@ public class TradingDbContext : DbContext
     public DbSet<ExchangeHoliday> ExchangeHolidays => Set<ExchangeHoliday>();
     public DbSet<HeroZeroScore> HeroZeroScores => Set<HeroZeroScore>();
     public DbSet<StrategyExecutionLog> StrategyExecutionLogs => Set<StrategyExecutionLog>();
+    public DbSet<StrategyPerformance> StrategyPerformances => Set<StrategyPerformance>();
+    public DbSet<IndicatorSnapshot> IndicatorSnapshots => Set<IndicatorSnapshot>();
+    public DbSet<TrailingStopLog> TrailingStopLogs => Set<TrailingStopLog>();
+    public DbSet<StrategySetting> StrategySettings => Set<StrategySetting>();
 
     protected override void OnModelCreating(ModelBuilder mb)
     {
@@ -60,6 +64,8 @@ public class TradingDbContext : DbContext
              .HasDatabaseName("IX_Signal_Symbol_CreatedOn");
 
             e.Property(s => s.StrategyType).HasMaxLength(20).HasDefaultValue("SINGLE");
+            e.Property(s => s.SelectedStrategy).HasMaxLength(20).HasDefaultValue("");
+            e.Property(s => s.MarketState).HasMaxLength(30).HasDefaultValue("");
             e.Property(s => s.Leg2Symbol).HasMaxLength(50);
             e.Property(s => s.Leg2OrderId).HasMaxLength(50);
             e.Property(s => s.Leg2Ltp).HasPrecision(18, 2);
@@ -71,6 +77,7 @@ public class TradingDbContext : DbContext
             e.Property(s => s.OrderReferenceId).HasMaxLength(50);
             e.Property(s => s.BrokerOrderStatus).HasMaxLength(30);
             e.Property(s => s.AtrPctAtEntry).HasPrecision(9, 4);
+            e.Property(s => s.AtrRawAtEntry).HasPrecision(18, 4);
         });
 
         mb.Entity<SignalOutcome>(e =>
@@ -195,6 +202,8 @@ public class TradingDbContext : DbContext
             e.HasIndex(t => t.TradeDate)
              .HasDatabaseName("IX_TradeJournal_TradeDate");
             e.Property(t => t.ExitReason).HasMaxLength(50);
+            e.Property(t => t.SelectedStrategy).HasMaxLength(20).HasDefaultValue("");
+            e.Property(t => t.MarketState).HasMaxLength(30).HasDefaultValue("");
         });
 
         mb.Entity<PaperTrade>(e =>
@@ -369,12 +378,100 @@ public class TradingDbContext : DbContext
         {
             e.Property(s => s.Symbol).HasMaxLength(50).IsRequired();
             e.Property(s => s.SelectedStrategy).HasMaxLength(20).IsRequired();
+            e.Property(s => s.MarketState).HasMaxLength(30).IsRequired();
             e.Property(s => s.Reason).HasMaxLength(500);
             e.Property(s => s.Score).HasPrecision(18, 2);
 
             // Audit/analytics: WHERE Symbol=? AND CreatedOn BETWEEN ...
             e.HasIndex(s => new { s.Symbol, s.CreatedOn })
              .HasDatabaseName("IX_StrategyExecutionLog_Symbol_CreatedOn");
+        });
+
+        mb.Entity<StrategyPerformance>(e =>
+        {
+            e.Property(s => s.Strategy).HasMaxLength(20).IsRequired();
+            e.Property(s => s.MarketState).HasMaxLength(30).IsRequired();
+            e.Property(s => s.WinRate).HasPrecision(9, 4);
+            e.Property(s => s.ProfitFactor).HasPrecision(18, 4);
+            e.Property(s => s.Expectancy).HasPrecision(18, 2);
+            e.Property(s => s.AverageWin).HasPrecision(18, 2);
+            e.Property(s => s.AverageLoss).HasPrecision(18, 2);
+            e.Property(s => s.NetPnL).HasPrecision(18, 2);
+            e.Property(s => s.MaxDrawdown).HasPrecision(9, 4);
+
+            // Upsert target — one row per bucket; also the read path for GetWinRateAsync.
+            e.HasIndex(s => new { s.Strategy, s.MarketState, s.Expiry, s.Hour })
+             .IsUnique()
+             .HasDatabaseName("IX_StrategyPerformance_Bucket");
+        });
+
+        mb.Entity<IndicatorSnapshot>(e =>
+        {
+            e.Property(s => s.Symbol).HasMaxLength(20).IsRequired();
+
+            e.Property(s => s.Ltp).HasPrecision(18, 2);
+            e.Property(s => s.DayOpen).HasPrecision(18, 2);
+            e.Property(s => s.YesterdayClose).HasPrecision(18, 2);
+
+            e.Property(s => s.Ema20).HasPrecision(18, 4);
+            e.Property(s => s.Ema50).HasPrecision(18, 4);
+            e.Property(s => s.Ema20_5m).HasPrecision(18, 4);
+            e.Property(s => s.Ema50_5m).HasPrecision(18, 4);
+
+            e.Property(s => s.Rsi).HasPrecision(18, 4);
+            e.Property(s => s.AtrRaw).HasPrecision(18, 4);
+            e.Property(s => s.AtrPct).HasPrecision(18, 4);
+            e.Property(s => s.Pcr).HasPrecision(18, 4);
+            e.Property(s => s.Vwap).HasPrecision(18, 4);
+
+            e.Property(s => s.CurrentVolume).HasPrecision(18, 2);
+            e.Property(s => s.AvgVolume20).HasPrecision(18, 2);
+            e.Property(s => s.VolumeRatio).HasPrecision(18, 4);
+            e.Property(s => s.PriceChangePct).HasPrecision(18, 4);
+
+            e.Property(s => s.TrendDirection).HasMaxLength(20);
+            e.Property(s => s.MarketRegime).HasMaxLength(30);
+            e.Property(s => s.MarketState).HasMaxLength(30);
+            e.Property(s => s.StrategySelected).HasMaxLength(30);
+            e.Property(s => s.Confidence).HasPrecision(18, 2);
+            e.Property(s => s.BlockedBy).HasMaxLength(100);
+            e.Property(s => s.BlockedReason).HasMaxLength(500);
+
+            // Matches the expected read pattern: WHERE Symbol=? ORDER BY SnapshotTime
+            e.HasIndex(s => new { s.Symbol, s.SnapshotTime })
+             .HasDatabaseName("IX_IndicatorSnapshot_Symbol_SnapshotTime");
+        });
+
+        mb.Entity<TrailingStopLog>(e =>
+        {
+            e.Property(t => t.Symbol).HasMaxLength(50).IsRequired();
+            e.Property(t => t.OldOptionSL).HasPrecision(18, 2);
+            e.Property(t => t.NewOptionSL).HasPrecision(18, 2);
+            e.Property(t => t.AtrRaw).HasPrecision(18, 4);
+            e.Property(t => t.Delta).HasPrecision(10, 6);
+            e.Property(t => t.OptionAtrDistance).HasPrecision(18, 4);
+            e.Property(t => t.TargetSL).HasPrecision(18, 2);
+            e.Property(t => t.MaxStep).HasPrecision(18, 2);
+            e.Property(t => t.MfePrice).HasPrecision(18, 2);
+
+            // Matches the expected read pattern: WHERE SignalId=? ORDER BY CreatedOn
+            e.HasIndex(t => new { t.SignalId, t.CreatedOn })
+             .HasDatabaseName("IX_TrailingStopLog_SignalId_CreatedOn");
+        });
+
+        mb.Entity<StrategySetting>(e =>
+        {
+            e.Property(s => s.SettingKey).HasMaxLength(100).IsRequired();
+            e.Property(s => s.Symbol).HasMaxLength(50);
+            e.Property(s => s.SettingValue).HasPrecision(18, 6);
+            e.Property(s => s.Description).HasMaxLength(500);
+
+            // StrategySettingsService cache load: WHERE IsActive = 1
+            e.HasIndex(s => s.IsActive).HasDatabaseName("IX_StrategySetting_IsActive");
+
+            // One row per key+symbol (Symbol nullable = global) — upsert target
+            e.HasIndex(s => new { s.SettingKey, s.Symbol }).IsUnique()
+             .HasDatabaseName("IX_StrategySetting_SettingKey_Symbol");
         });
     }
 }

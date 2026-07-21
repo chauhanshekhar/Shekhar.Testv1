@@ -20,6 +20,7 @@ internal static class DatabaseExtensions
         services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddSingleton<IInstrumentCache, InstrumentCache>();
+        services.AddSingleton<IStrategySettingsService, StrategySettingsService>();
 
         services.AddHealthChecks()
             .AddDbContextCheck<TradingDbContext>("database");

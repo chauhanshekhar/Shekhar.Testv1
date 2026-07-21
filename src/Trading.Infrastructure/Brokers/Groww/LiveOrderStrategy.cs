@@ -44,7 +44,7 @@ public class LiveOrderStrategy : IOrderStrategy
             throw new GrowwOrderRejectedException(result1.ErrorMessage ?? "Groww rejected the order");
         }
 
-        var orderId1 = result1.Data?.Payload?.GrowwOrderId ?? Guid.NewGuid().ToString();
+        var orderId1 = result1.Data?.Payload?.GrowwOrderId ?? Guid.NewGuid().ToString("N")[..20];
 
         // Leg 2 for spreads (short OTM)
         if (signal.StrategyType != "SINGLE" && !string.IsNullOrEmpty(signal.Leg2Symbol))
@@ -76,7 +76,7 @@ public class LiveOrderStrategy : IOrderStrategy
         var result1 = await _growwHttp.PostAsync<GrowwResponse<PlaceOrderResponse>>(
             GrowwEndpoint.OrderCreate, req1, signalId);
         if (!result1.IsSuccess) return "CLOSE_FAILED";
-        var orderId1 = result1.Data?.Payload?.GrowwOrderId ?? Guid.NewGuid().ToString();
+        var orderId1 = result1.Data?.Payload?.GrowwOrderId ?? Guid.NewGuid().ToString("N")[..20];
 
         if (signal.StrategyType != "SINGLE"
            && !string.IsNullOrEmpty(signal.Leg2Symbol)

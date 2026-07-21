@@ -32,32 +32,33 @@ public class EmaWorker : BackgroundService
         _scopeFactory = scopeFactory;
         _instrumentCache = instrumentCache;
     }
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!stoppingToken.IsCancellationRequested)
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
+
+        try
         {
-            try
+            while (await timer.WaitForNextTickAsync(stoppingToken))
             {
                 if (!MarketHours.IsOpen())
-                {
-                    await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
                     continue;
-                }
 
                 foreach (var symbol in _instrumentCache.GetActive().Select(i => i.Symbol))
                 {
-                    try { await ProcessSymbol(symbol); }
+                    try
+                    {
+                        await ProcessSymbol(symbol);
+                    }
                     catch (Exception ex)
-                    { _logger.LogError(ex, "EmaWorker error for {Symbol}", symbol); }
+                    {
+                        _logger.LogError(ex, "EmaWorker error for {Symbol}", symbol);
+                    }
                 }
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "EmaWorker loop error");
-            }
-
-            await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("EmaWorker stopped gracefully.");
         }
     }
 

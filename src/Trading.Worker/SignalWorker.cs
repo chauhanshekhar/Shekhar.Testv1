@@ -2,6 +2,7 @@ using Trading.Application.Interfaces;
 using Trading.Domain;
 using Trading.Domain.Entities;
 using Trading.Infrastructure;
+using Trading.Infrastructure.Repositories;
 using Trading.Infrastructure.Services;
 using Trading.Worker.SignalGates;
 
@@ -24,6 +25,7 @@ public class SignalWorker : BackgroundService
         new CircuitBreakerGate(),
         new ConsecutiveLossGate(),
         new OnePositionGate(),
+        new AtrGate(),
         new MarketRegimeGate(),
     ];
 
@@ -93,40 +95,80 @@ public class SignalWorker : BackgroundService
         using var scope = _scopeFactory.CreateScope();
         var ctx = SignalContext.Resolve(scope.ServiceProvider, symbol);
 
-        var market = await BuildMarketAsync(ctx, symbol);
+        // Market Snapshot Audit: BuildAsync attaches an IndicatorSnapshot to market.Audit whenever
+        // it successfully builds a snapshot. Kept in scope here (rather than inside a BuildMarketAsync
+        // helper) so it's still reachable for the EMA-not-ready early return below, then finished and
+        // saved exactly once in the finally block — this restructuring doesn't change any check itself.
+        var market = await MarketSnapshotBuilder.BuildAsync(ctx);
         if (market == null) return;
 
-        if (!await PassPreGatesAsync(ctx, market, ct)) return;
+        var audit = market.Audit ?? new IndicatorSnapshot { SnapshotTime = IstClock.Now, Symbol = symbol };
 
-        var strategyManager = scope.ServiceProvider.GetRequiredService<StrategyManager>();
-        var signal = await strategyManager.SelectSignalAsync(ctx, market, symbol);
-        if (signal is null) return;
+        try
+        {
+            // Skip EMA check for expiry day (HeroZero doesn't need EMAs)
+            var skipEmaCheck = ctx.Instruments.IsExpiryDay(symbol);
+            if (!skipEmaCheck && (market.Ema20 <= 0 || market.Ema50 <= 0))
+            {
+                _logger.LogDebug("Indicators not ready ({Symbol}) — EMA20:{E20} EMA50:{E50}",
+                    symbol, market.Ema20, market.Ema50);
+                audit.BlockedBy = "IndicatorsNotReady";
+                audit.BlockedReason = $"EMA20:{market.Ema20:F2} EMA50:{market.Ema50:F2}";
+                return;
+            }
 
-        if (!await PassPostGatesAsync(ctx, market, signal, ct)) return;
+            if (!await PassPreGatesAsync(ctx, market, ct, audit)) return;
 
-        await PersistAndPlaceAsync(ctx, market, signal, symbol, ct);
+            var strategyManager = scope.ServiceProvider.GetRequiredService<StrategyManager>();
+            var result = await strategyManager.SelectSignalAsync(ctx, market, symbol);
+            audit.MarketState = result.MarketState.ToString();
+            audit.StrategySelected = result.Strategy.ToString();
+            audit.Confidence = result.Confidence;
+
+            if (result.Signal is null)
+            {
+                audit.SignalGenerated = false;
+                audit.BlockedBy = result.BlockedBy;
+                audit.BlockedReason = Truncate(result.BlockedReason, 500);
+                return;
+            }
+
+            var signal = result.Signal;
+            if (!await PassPostGatesAsync(ctx, market, signal, ct, audit)) return;
+
+            audit.SignalGenerated = true;
+            await PersistAndPlaceAsync(ctx, market, signal, symbol, ct);
+        }
+        finally
+        {
+            await SaveAuditAsync(scope.ServiceProvider, ctx.Uow, audit);
+        }
     }
 
-    // ── Step 1: Build market snapshot + indicator check ───────────────────────
-    private async Task<MarketSnapshot?> BuildMarketAsync(SignalContext ctx, string symbol)
+    // BlockedReason is nvarchar(500) — the combined CALL/PUT failure-condition list from
+    // SignalGenerationResult can exceed that when almost every condition fails, so guard the
+    // insert instead of letting SaveAuditAsync's best-effort try/catch silently swallow it.
+    private static string? Truncate(string? value, int maxLength) =>
+        value != null && value.Length > maxLength ? value[..maxLength] : value;
+
+    // ── Market Snapshot Audit: best-effort, single insert, never blocks trading ───────────────
+    private async Task SaveAuditAsync(IServiceProvider sp, IUnitOfWork uow, IndicatorSnapshot audit)
     {
-        var market = await MarketSnapshotBuilder.BuildAsync(ctx);
-        if (market == null) return null;
-
-        // Skip EMA check for expiry day (HeroZero doesn't need EMAs)
-        var skipEmaCheck = ctx.Instruments.IsExpiryDay(symbol);
-        if (!skipEmaCheck && (market.Ema20 <= 0 || market.Ema50 <= 0))
+        try
         {
-            _logger.LogDebug("Indicators not ready ({Symbol}) — EMA20:{E20} EMA50:{E50}",
-                symbol, market.Ema20, market.Ema50);
-            return null;
+            audit.CreatedOn = IstClock.Now;
+            var repo = sp.GetRequiredService<IRepository<IndicatorSnapshot>>();
+            await repo.StageAsync(audit);
+            await uow.SaveChangesAsync();
         }
-
-        return market;
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "SignalWorker: failed to persist indicator snapshot for {Symbol} — continuing", audit.Symbol);
+        }
     }
 
     // ── Step 2: Pre-signal gates ──────────────────────────────────────────────
-    private async Task<bool> PassPreGatesAsync(SignalContext ctx, MarketSnapshot market, CancellationToken ct)
+    private async Task<bool> PassPreGatesAsync(SignalContext ctx, MarketSnapshot market, CancellationToken ct, IndicatorSnapshot audit)
     {
         var isExpiryDay = ctx.Instruments.IsExpiryDay(ctx.Symbol);
 
@@ -140,6 +182,8 @@ public class SignalWorker : BackgroundService
             if (block != null)
             {
                 _logger.LogInformation("{Gate}: {Reason}", gate.GetType().Name, block);
+                audit.BlockedBy = gate.GetType().Name;
+                audit.BlockedReason = block;
                 return false;
             }
         }
@@ -147,7 +191,7 @@ public class SignalWorker : BackgroundService
     }
 
     // ── Step 4: Post-signal gates ─────────────────────────────────────────────
-    private async Task<bool> PassPostGatesAsync(SignalContext ctx, MarketSnapshot market, Signal signal, CancellationToken ct)
+    private async Task<bool> PassPostGatesAsync(SignalContext ctx, MarketSnapshot market, Signal signal, CancellationToken ct, IndicatorSnapshot audit)
     {
         foreach (var gate in PostGates)
         {
@@ -155,6 +199,8 @@ public class SignalWorker : BackgroundService
             if (block != null)
             {
                 _logger.LogInformation("{Gate}: {Reason}", gate.GetType().Name, block);
+                audit.BlockedBy = gate.GetType().Name;
+                audit.BlockedReason = block;
                 return false;
             }
         }
@@ -178,9 +224,11 @@ public class SignalWorker : BackgroundService
         signal.DeltaAtEntry      = entryLeg?.Delta      ?? 0m;
         signal.ChangeInOiAtEntry = entryLeg?.ChangeInOi ?? 0m;
         signal.AtrPctAtEntry     = market.AtrPct;
+        signal.AtrRawAtEntry     = market.AtrRaw;
 
         signal.Status = SignalStatus.Pending;
-        signal.OrderReferenceId = Guid.NewGuid().ToString("N");
+       // signal.OrderReferenceId = Guid.NewGuid().ToString("N");
+        signal.OrderReferenceId = Guid.NewGuid().ToString("N")[..20];
         await ctx.SignalRepo.StageAsync(signal);
         await ctx.Uow.SaveChangesAsync();
 

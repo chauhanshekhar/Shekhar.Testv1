@@ -22,6 +22,7 @@ public class HeroZeroSignalEngine
     private readonly SystemSettingsService _settingsService;
     private readonly HeroZeroScoreService _scoreService;
     private readonly StrikeRankingService _ranking;
+    private readonly AtrRiskService _atrRisk;
     private readonly IRepository<HeroZeroScore> _scoreRepo;
     private readonly IUnitOfWork _uow;
     private readonly ILogger<HeroZeroSignalEngine> _logger;
@@ -39,6 +40,7 @@ public class HeroZeroSignalEngine
         SystemSettingsService settingsService,
         HeroZeroScoreService scoreService,
         StrikeRankingService ranking,
+        AtrRiskService atrRisk,
         IRepository<HeroZeroScore> scoreRepo,
         IUnitOfWork uow,
         ILogger<HeroZeroSignalEngine> logger)
@@ -47,6 +49,7 @@ public class HeroZeroSignalEngine
         _settingsService = settingsService;
         _scoreService = scoreService;
         _ranking = ranking;
+        _atrRisk = atrRisk;
         _scoreRepo = scoreRepo;
         _uow = uow;
         _logger = logger;
@@ -62,6 +65,7 @@ public class HeroZeroSignalEngine
         decimal currentVolume,
         decimal avgVolume20,
         decimal priceChangePct,
+        decimal atrRaw,
         decimal ema20_5m,
         decimal ema50_5m,
         List<Candle> candles5m,
@@ -160,12 +164,16 @@ public class HeroZeroSignalEngine
             hero.TrendScore, hero.OiScore, hero.VolumeScore, hero.GreeksScore, hero.LiquidityScore, hero.MomentumScore,
             result.Reason);
 
+        // Index SL/T1/T2 — ATR-based via AtrRiskService, same as SignalEngineService and
+        // ExpirySignalEngine (no flag; all three engines share one unconditional path).
+        var risk = _atrRisk.CalculateIndexRisk(symbol, ltp, atrRaw, call, settings);
+
         var builder = new SignalBuilder(symbol);
         if (call) builder.CALL(); else builder.PUT();
 
         return builder
             .AtIndexPrice(ltp)
-            .WithIndexStops(_instruments.GetIndexStopPoints(symbol))
+            .WithIndexTargets(risk.StopLoss, risk.Target1, risk.Target2)
             .ForOption(hero.StrikePrice, hero.OptionType, optionSymbol, hero.Ltp)
             .AsHeroZero() // overrides SL/T1/T2 to aggressive levels
             .OnExchange(_instruments.GetExchange(symbol))
