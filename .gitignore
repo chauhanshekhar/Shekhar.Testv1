@@ -15,12 +15,22 @@ appsettings.Development.json
 
 logs/
 # Never commit real secrets — use environment variables or secrets manager
-# appsettings.Production.json is a template with #{PLACEHOLDER}# tokens, safe to commit
+# appsettings.Production.json previously carried real credentials in committed history —
+# both it and the base appsettings.json are now ignored entirely. Safe placeholder copies
+# live alongside as appsettings.json.example / appsettings.Production.json.example.
 # appsettings.Development.json is safe (dev keys only)
 # The file below should be created locally and NEVER committed:
 appsettings.Local.json
 appsettings.*.Local.json
 secrets.json
+appsettings.json
+appsettings.Production.json
+!appsettings.json.example
+!appsettings.Production.json.example
+
+# deploy.cmd previously had a real DB password hardcoded — ignored entirely now.
+# See deploy.cmd.example for the safe, env-var-driven template.
+deploy.cmd
 
 # ── Angular ───────────────────────────────────────────────────────────────
 src/Trading.Web/node_modules/

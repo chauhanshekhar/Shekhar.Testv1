@@ -7,7 +7,7 @@ services:
 
     environment:
       ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: "Trading@123!"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD}"
 
     ports:
       - "1433:1433"
@@ -21,7 +21,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Trading@123!' -C -Q 'SELECT 1' || exit 1"
+          "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' || exit 1"
         ]
       interval: 15s
       timeout: 10s
@@ -46,7 +46,7 @@ services:
         Server=sqlserver;
         Database=TradingDb;
         User Id=sa;
-        Password=Trading@123!;
+        Password=${MSSQL_SA_PASSWORD};
         TrustServerCertificate=True;
         Encrypt=False;
 
@@ -70,7 +70,7 @@ services:
         Server=sqlserver;
         Database=TradingDb;
         User Id=sa;
-        Password=Trading@123!;
+        Password=${MSSQL_SA_PASSWORD};
         TrustServerCertificate=True;
         Encrypt=False;
 

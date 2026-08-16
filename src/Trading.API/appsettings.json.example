@@ -22,17 +22,17 @@
   "Jwt": {
     "Issuer": "TradingPlatform",
     "Audience": "TradingPlatform.Web",
-    "Key": "shekharkumarnagapadam@TradingPlatform2026#SecureKey"
+    "Key": "REPLACE_WITH_A_LONG_RANDOM_SECRET"
   },
   "Telegram": {
-    "BotToken": "8820426634:AAF93s5PD-1F73GI9DgDkEEKh10Xop6cnyQ",
-    "ChatId": "6030816391"
+    "BotToken": "REPLACE_WITH_TELEGRAM_BOT_TOKEN",
+    "ChatId": "REPLACE_WITH_TELEGRAM_CHAT_ID"
   },
   "Groww": {
     "BaseUrl": "https://api.groww.in",
-    "AccessToken": "eyJraWQiOiJaTUtjVXciLCJhbGciOiJFUzI1NiJ9.eyJleHAiOjE3ODIwODgyMDAsImlhdCI6MTc4MjA1NDM4MywibmJmIjoxNzgyMDU0MzgzLCJzdWIiOiJ7XCJ0b2tlblJlZklkXCI6XCIxNTJjOGE3My1iYmFjLTQ3ZDAtODFhNi1iMGQ0OWI5MThkMmJcIixcInZlbmRvckludGVncmF0aW9uS2V5XCI6XCJlMzFmZjIzYjA4NmI0MDZjODg3NGIyZjZkODQ5NTMxM1wiLFwidXNlckFjY291bnRJZFwiOlwiYTgxYzY2NmItNGU3ZS00NGQ1LTkzMmItOWNiNDhkMmMzNjg1XCIsXCJkZXZpY2VJZFwiOlwiYTgyZGFjMTctOGY3ZC00OTEzLWEzMWUtYWJiMmU2MTEwNzI1XCIsXCJzZXNzaW9uSWRcIjpcIjVlZWI4MDI3LTBkMTctNGI3NS1iMTM4LTIxNzg1ZDNhNjkxZVwiLFwiYWRkaXRpb25hbERhdGFcIjpcIno1NC9NZzltdjE2WXdmb0gvS0EwYkw3QVllR3VlMU8zMm5XRWlITjBKWXhSTkczdTlLa2pWZDNoWjU1ZStNZERhWXBOVi9UOUxIRmtQejFFQisybTdRPT1cIixcInJvbGVcIjpcIm9yZGVyLWJhc2ljLGxpdmVfZGF0YS1iYXNpYyxub25fdHJhZGluZy1iYXNpYyxvcmRlcl9yZWFkX29ubHktYmFzaWMsYmFja190ZXN0XCIsXCJzb3VyY2VJcEFkZHJlc3NcIjpcIjI0MDE6NDkwMDpiZTkzOjFkMmY6NTJmODpkODlmOmUwNzY6NjAxOCwxNzIuNjguMjE0LjQ4LDM1LjI0MS4yMy4xMjNcIixcInR3b0ZhRXhwaXJ5VHNcIjoxNzgyMDg4MjAwMDAwLFwidmVuZG9yTmFtZVwiOlwiZ3Jvd3dBcGlcIn0iLCJpc3MiOiJhcGV4LWF1dGgtcHJvZC1hcHAifQ.C4Mq11IAAc0Xu0iS7Brhi9gbO5ZCPo12gmzvbl2E01F5nq-d_hZuk-6bFN7EeQsz2rGFXWV4MqLIUoFKBQ20dw",
+    "AccessToken": "REPLACE_WITH_GROWW_ACCESS_TOKEN",
     "WebhookSecret": "",
-    "Mode": "Live"
+    "Mode": "Paper"
   },
   "Database": {
     "AutoMigrate": false

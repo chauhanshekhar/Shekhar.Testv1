@@ -4,6 +4,12 @@ setlocal
 set SERVER=ubuntu@13.206.229.15
 set KEY=%USERPROFILE%\Downloads\trading-key.pem
 
+if "%DB_PASSWORD%"=="" (
+    echo ERROR: DB_PASSWORD environment variable is not set.
+    echo Set it before running this script, e.g.:  set DB_PASSWORD=your-password
+    goto error
+)
+
 echo Building API...
 docker build -t trading-api-paper:latest -f src\Trading.API\Dockerfile src
 if errorlevel 1 goto error
@@ -35,9 +41,9 @@ ssh -i "%KEY%" %SERVER% "sudo docker rm trading-api-paper || true"
 ssh -i "%KEY%" %SERVER% "sudo docker stop trading-worker-paper || true"
 ssh -i "%KEY%" %SERVER% "sudo docker rm trading-worker-paper || true"
 
-ssh -i "%KEY%" %SERVER% "sudo docker run -d --name trading-api-paper --restart unless-stopped --network trading-network -p 8081:8080 -e ASPNETCORE_ENVIRONMENT=Production -e ASPNETCORE_URLS=http://+:8080 -e ConnectionStrings__DefaultConnection='Server=sqlserver;Database=TradingDB_Paper;User Id=sa;Password=Trade@123456;TrustServerCertificate=True;Encrypt=False;' trading-api-paper:latest"
+ssh -i "%KEY%" %SERVER% "sudo docker run -d --name trading-api-paper --restart unless-stopped --network trading-network -p 8081:8080 -e ASPNETCORE_ENVIRONMENT=Production -e ASPNETCORE_URLS=http://+:8080 -e ConnectionStrings__DefaultConnection='Server=sqlserver;Database=TradingDB_Paper;User Id=sa;Password=%DB_PASSWORD%;TrustServerCertificate=True;Encrypt=False;' trading-api-paper:latest"
 
-ssh -i "%KEY%" %SERVER% "sudo docker run -d --name trading-worker-paper --restart unless-stopped --network trading-network -e DOTNET_ENVIRONMENT=Production -e ConnectionStrings__DefaultConnection='Server=sqlserver;Database=TradingDB_Paper;User Id=sa;Password=Trade@123456;TrustServerCertificate=True;Encrypt=False;' trading-worker-paper:latest"
+ssh -i "%KEY%" %SERVER% "sudo docker run -d --name trading-worker-paper --restart unless-stopped --network trading-network -e DOTNET_ENVIRONMENT=Production -e ConnectionStrings__DefaultConnection='Server=sqlserver;Database=TradingDB_Paper;User Id=sa;Password=%DB_PASSWORD%;TrustServerCertificate=True;Encrypt=False;' trading-worker-paper:latest"
 
 ssh -i "%KEY%" %SERVER% "rm -f /home/ubuntu/trading/trading-api-paper.tar"
 ssh -i "%KEY%" %SERVER% "rm -f /home/ubuntu/trading/trading-worker-paper.tar"

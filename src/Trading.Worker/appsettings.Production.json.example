@@ -1,0 +1,5 @@
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=sqlserver,1433;Database=TradingDB;User Id=sa;Password=REPLACE_WITH_DB_PASSWORD;TrustServerCertificate=True;Encrypt=False;"
+  }
+}
