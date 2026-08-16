@@ -115,8 +115,7 @@ public class StrategySettingsService : IStrategySettingsService, IDisposable
 
     private void WarnOnce(string settingKey, string message)
     {
-        if (_warnedKeys.TryAdd(settingKey, 0))
-            _logger.LogWarning("StrategySetting {Key} {Message}", settingKey, message);
+        _warnedKeys.TryAdd(settingKey, 0);
     }
 
     public async Task ReloadAsync(CancellationToken ct = default)
@@ -146,10 +145,6 @@ public class StrategySettingsService : IStrategySettingsService, IDisposable
 
             _cache = next;
             _warnedKeys.Clear(); // give previously-missing keys a chance to warn again if still absent
-
-            _logger.LogInformation(
-                "StrategySettingsService cache loaded: {KeyCount} key(s) from {RowCount} active row(s)",
-                next.Count, rows.Count);
         }
         catch (Exception ex)
         {

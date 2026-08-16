@@ -4,6 +4,7 @@ using Trading.Domain.Entities;
 using Trading.Infrastructure;
 using Trading.Infrastructure.Repositories;
 using Trading.Infrastructure.Services;
+using Trading.SignalEngine.Services;
 using Trading.Worker.SignalGates;
 
 namespace Trading.Worker;
@@ -54,8 +55,6 @@ public class SignalWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("SignalWorker Started");
-
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -110,8 +109,6 @@ public class SignalWorker : BackgroundService
             var skipEmaCheck = ctx.Instruments.IsExpiryDay(symbol);
             if (!skipEmaCheck && (market.Ema20 <= 0 || market.Ema50 <= 0))
             {
-                _logger.LogDebug("Indicators not ready ({Symbol}) — EMA20:{E20} EMA50:{E50}",
-                    symbol, market.Ema20, market.Ema50);
                 audit.BlockedBy = "IndicatorsNotReady";
                 audit.BlockedReason = $"EMA20:{market.Ema20:F2} EMA50:{market.Ema50:F2}";
                 return;
@@ -124,6 +121,7 @@ public class SignalWorker : BackgroundService
             audit.MarketState = result.MarketState.ToString();
             audit.StrategySelected = result.Strategy.ToString();
             audit.Confidence = result.Confidence;
+            ApplyScore(audit, result.Score);
 
             if (result.Signal is null)
             {
@@ -151,7 +149,31 @@ public class SignalWorker : BackgroundService
     private static string? Truncate(string? value, int maxLength) =>
         value != null && value.Length > maxLength ? value[..maxLength] : value;
 
+    // Score breakdown (see SignalScore) — null under the legacy AND-gated path, populated only
+    // when EnableSignalScoring is on for the symbol. Kept here rather than inline for readability.
+    private static void ApplyScore(IndicatorSnapshot audit, SignalScore? score)
+    {
+        if (score is null)
+            return;
+
+        audit.ScoreDirection = score.IsCall ? "CALL" : "PUT";
+        audit.ScoreTotal = score.Total;
+        audit.ScoreTrend = score.TrendScore;
+        audit.ScoreEma20 = score.Ema20Score;
+        audit.ScoreEma50 = score.Ema50Score;
+        audit.ScoreRsi = score.RsiScore;
+        audit.ScorePriceChange = score.PriceChangeScore;
+        audit.ScoreCandle = score.CandleScore;
+        audit.ScoreBody = score.BodyScore;
+        audit.ScoreAtr = score.AtrScore;
+        audit.ScorePcr = score.PcrScore;
+        audit.ScoreOi = score.OiScore;
+        audit.ScoreConfidence = score.ConfidenceScore;
+    }
+
     // ── Market Snapshot Audit: best-effort, single insert, never blocks trading ───────────────
+    // Failure is logged (not silently swallowed) but still never propagates — an audit-row insert
+    // failure must not be able to take down signal generation.
     private async Task SaveAuditAsync(IServiceProvider sp, IUnitOfWork uow, IndicatorSnapshot audit)
     {
         try
@@ -163,7 +185,10 @@ public class SignalWorker : BackgroundService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "SignalWorker: failed to persist indicator snapshot for {Symbol} — continuing", audit.Symbol);
+            _logger.LogError(ex,
+                "Failed to save IndicatorSnapshot audit for {Symbol} at {SnapshotTime}",
+                audit.Symbol, audit.SnapshotTime);
+            await _errorLogger.LogAsync("SignalWorker.SaveAuditAsync", ex, audit.Symbol);
         }
     }
 
@@ -181,7 +206,6 @@ public class SignalWorker : BackgroundService
             var block = await gate.BlockAsync(ctx, market, ct);
             if (block != null)
             {
-                _logger.LogInformation("{Gate}: {Reason}", gate.GetType().Name, block);
                 audit.BlockedBy = gate.GetType().Name;
                 audit.BlockedReason = block;
                 return false;
@@ -198,13 +222,30 @@ public class SignalWorker : BackgroundService
             var block = await gate.BlockAsync(ctx, market, signal, ct);
             if (block != null)
             {
-                _logger.LogInformation("{Gate}: {Reason}", gate.GetType().Name, block);
                 audit.BlockedBy = gate.GetType().Name;
                 audit.BlockedReason = block;
+                CaptureBlockedLeg(market, signal, audit);
                 return false;
             }
         }
         return true;
+    }
+
+    // Candidate option leg at post-gate block time — same lookup PersistAndPlaceAsync uses for a
+    // passing signal, just recorded instead of discarded. Missed-opportunity analysis over
+    // IndicatorSnapshot needs Delta/OI here since it isn't available anywhere else for blocked signals.
+    private static void CaptureBlockedLeg(MarketSnapshot market, Signal signal, IndicatorSnapshot audit)
+    {
+        var entryLeg = market.OptionChain
+            .FirstOrDefault(o => o.TradingSymbol == signal.OptionSymbol
+                              || (o.StrikePrice == signal.StrikePrice && o.OptionType == signal.OptionType));
+
+        audit.BlockedStrikePrice = signal.StrikePrice;
+        audit.BlockedOptionType = signal.OptionType;
+        audit.BlockedOptionSymbol = signal.OptionSymbol;
+        audit.BlockedDelta = entryLeg?.Delta;
+        audit.BlockedOptionLtp = entryLeg?.Ltp;
+        audit.BlockedChangeInOi = entryLeg?.ChangeInOi;
     }
 
     // ── Step 5: Persist + place order + broadcast ─────────────────────────────
@@ -245,6 +286,7 @@ public class SignalWorker : BackgroundService
             Exchange = signal.Exchange,
             Side = "BUY",
             OrderType = "LIMIT",
+            OrderPurpose = Trading.Domain.OrderPurpose.Entry,
             ProductType = "MIS",
             Status = OrderStatus.Pending,
             Price = signal.OptionLtp > 0 ? signal.OptionLtp : signal.EntryPrice,
@@ -258,30 +300,16 @@ public class SignalWorker : BackgroundService
         await PlaceOrderAsync(ctx, signal, order, symbol);
 
         try { await ctx.Hub.SendSignalAsync(signal); }
-        catch (Exception ex)
-        { _logger.LogWarning(ex, "SignalR push failed for {Symbol} signal {Id}", symbol, signal.Id); }
-
-        _logger.LogInformation("Signal Generated {Type} {Symbol} @ {Price} Id:{Id} Order:{OrderId}",
-            signal.SignalType, signal.Symbol, signal.EntryPrice, signal.Id, signal.BrokerOrderId);
+        catch (Exception) { }
     }
 
     // ── Step 5a: Broker order placement ──────────────────────────────────────
     private async Task PlaceOrderAsync(SignalContext ctx, Signal signal, Order order, string symbol)
     {
-        string orderId = "N/A";
+        string orderId;
         try
         {
             orderId = await ctx.Orders.PlaceOrderAsync(signal);
-            signal.BrokerOrderId = orderId;
-            signal.Status = SignalStatus.OrderPlaced;
-
-            // Groww accepted the order — fill status isn't known yet. Order.Status stays
-            // PENDING (non-terminal) so BrokerOrderSyncWorker polls GetOrderStatusAsync
-            // (now that BrokerOrderId is set) and fills in the real Status/FilledQty/AvgPrice.
-            order.BrokerOrderId = orderId;
-            order.UpdatedAt = IstClock.Now;
-
-            await ctx.Uow.SaveChangesAsync();
         }
         catch (GrowwOrderAmbiguousException ex)
         {
@@ -292,13 +320,13 @@ public class SignalWorker : BackgroundService
             order.StatusMessage = ex.Message;
             order.UpdatedAt = IstClock.Now;
             await ctx.Uow.SaveChangesAsync();
-            _logger.LogWarning(ex, "Order placement ambiguous for {Symbol} signal {Id} — awaiting reconciliation", symbol, signal.Id);
             await _alerts.SendCriticalAsync(
                 $"Order placement UNKNOWN — {signal.SignalType} {symbol} @ ₹{signal.EntryPrice:F2}\n{ex.Message}\nWill reconcile via OrderReferenceId.");
+            return;
         }
         catch (Exception ex)
         {
-            // Definite rejection (GrowwOrderRejectedException) or any other unexpected failure.
+            // Broker call itself failed — no orderId was ever obtained. Genuine rejection.
             signal.Status = SignalStatus.OrderRejected;
 
             order.Status = OrderStatus.Failed;
@@ -306,16 +334,35 @@ public class SignalWorker : BackgroundService
             order.UpdatedAt = IstClock.Now;
 
             await ctx.Uow.SaveChangesAsync();
-            _logger.LogWarning(ex, "Order placement failed for {Symbol} signal {Id}", symbol, signal.Id);
             await _alerts.SendCriticalAsync(
                 $"Order rejected — {signal.SignalType} {symbol} @ ₹{signal.EntryPrice:F2}\n{ex.Message}");
+            return;
+        }
 
-            if (!string.IsNullOrEmpty(orderId) && orderId != "N/A")
-            {
-                try { await ctx.Orders.CancelOrderAsync(orderId); }
-                catch (Exception cancelEx)
-                { _logger.LogWarning(cancelEx, "Failed to cancel broker order {OrderId} after rejection", orderId); }
-            }
+        // Groww confirmed the order — from here on any failure is OUR failure, not a broker
+        // rejection. Never mark OrderRejected or cancel once we hold a real BrokerOrderId.
+        signal.BrokerOrderId = orderId;
+        signal.Status = SignalStatus.OrderPlaced;
+
+        // Fill status isn't known yet. Order.Status stays PENDING (non-terminal) so
+        // BrokerOrderSyncWorker polls GetOrderStatusAsync (now that BrokerOrderId is set)
+        // and fills in the real Status/FilledQty/AvgPrice.
+        order.BrokerOrderId = orderId;
+        order.UpdatedAt = IstClock.Now;
+
+        try
+        {
+            await ctx.Uow.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            // DB save failed AFTER the broker accepted the order — the position is real.
+            // Leave BrokerOrderId set and defer to BrokerOrderSyncWorker for reconciliation
+            // instead of mislabeling this as a rejection.
+            order.Status = OrderStatus.OrderUnknown;
+            order.StatusMessage = ex.Message;
+            await _alerts.SendCriticalAsync(
+                $"Order placed at broker (OrderId={orderId}) but local save FAILED — {signal.SignalType} {symbol} @ ₹{signal.EntryPrice:F2}\n{ex.Message}\nWill reconcile via BrokerOrderId.");
         }
     }
 

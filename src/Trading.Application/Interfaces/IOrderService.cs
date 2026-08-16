@@ -32,8 +32,19 @@ public interface IOrderService
     /// </summary>
     Task<BrokerOrderStatus?> GetOrderStatusAsync(string brokerOrderId);
 
-    /// <summary>Closes an open position by placing the opposite order at market.</summary>
-    Task<string> ClosePositionAsync(Signal signal, string reason, int? lotsToClose = null);
+    /// <summary>
+    /// Closes an open position by placing the opposite order at market. orderReferenceId
+    /// should be the caller's Order row's OrderReferenceId — it's sent to Groww as-is so a
+    /// later GetOrderByReferenceAsync can recover this specific close order.
+    /// </summary>
+    Task<string> ClosePositionAsync(Signal signal, string reason, int? lotsToClose = null, string? orderReferenceId = null);
+
+    /// <summary>
+    /// Places a broker-managed SL_M (stop-loss market) sell order that protects an open
+    /// SINGLE/HERO_ZERO position. Returns the broker order id, or "SL_FAILED" on rejection
+    /// (mirrors ClosePositionAsync's "CLOSE_FAILED" convention).
+    /// </summary>
+    Task<string> PlaceStopLossOrderAsync(Signal signal, decimal triggerPrice, int lots, string orderReferenceId);
 
     /// <summary>Looks up an order by Groww's own order id — used once BrokerOrderId is known.</summary>
     Task<OrderDetail?> GetOrderDetailAsync(string growwOrderId, string segment = "FNO");

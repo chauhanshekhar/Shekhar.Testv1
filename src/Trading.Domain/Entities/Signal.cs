@@ -80,4 +80,13 @@ public class Signal
     public string SelectedStrategy { get; set; } = "";
     public string MarketState { get; set; } = "";
     public bool IsExpiryDay { get; set; }
+
+    // Broker-managed stop loss (SL_M) — SINGLE/HERO_ZERO signals only (spreads keep the
+    // polling-based OptionSL exit; their OptionSL is a net two-leg premium, not a single
+    // instrument's price, so it can't be expressed as one broker order).
+    public string StopLossOrderId { get; set; } = "";        // BrokerOrderId of the resting SL_M sell
+    public decimal StopLossTriggerPrice { get; set; }         // trigger price currently resting on the broker
+    public string StopLossStatus { get; set; } = "";          // "" / PLACED / CANCELLED / FAILED
+    public DateTime? LastSlUpdateTime { get; set; }           // last placement attempt (success or fail)
+    public int StopLossRetryCount { get; set; }                // consecutive failed placement attempts; reset to 0 on success. Persisted so a restart doesn't forget and re-hammer the broker.
 }

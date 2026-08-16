@@ -78,6 +78,9 @@ public class TradingDbContext : DbContext
             e.Property(s => s.BrokerOrderStatus).HasMaxLength(30);
             e.Property(s => s.AtrPctAtEntry).HasPrecision(9, 4);
             e.Property(s => s.AtrRawAtEntry).HasPrecision(18, 4);
+            e.Property(s => s.StopLossOrderId).HasMaxLength(50).HasDefaultValue("");
+            e.Property(s => s.StopLossStatus).HasMaxLength(20).HasDefaultValue("");
+            e.Property(s => s.StopLossTriggerPrice).HasPrecision(18, 2);
         });
 
         mb.Entity<SignalOutcome>(e =>
@@ -233,6 +236,7 @@ public class TradingDbContext : DbContext
             e.Property(o => o.Exchange).HasMaxLength(10);
             e.Property(o => o.Side).HasMaxLength(10);
             e.Property(o => o.OrderType).HasMaxLength(20);
+            e.Property(o => o.OrderPurpose).HasMaxLength(20).HasDefaultValue("");
             e.Property(o => o.ProductType).HasMaxLength(20);
             e.Property(o => o.Status).HasMaxLength(30);
             e.Property(o => o.StatusMessage).HasMaxLength(500);
@@ -436,6 +440,15 @@ public class TradingDbContext : DbContext
             e.Property(s => s.Confidence).HasPrecision(18, 2);
             e.Property(s => s.BlockedBy).HasMaxLength(100);
             e.Property(s => s.BlockedReason).HasMaxLength(500);
+
+            e.Property(s => s.BlockedStrikePrice).HasPrecision(18, 2);
+            e.Property(s => s.BlockedOptionType).HasMaxLength(2);
+            e.Property(s => s.BlockedOptionSymbol).HasMaxLength(50);
+            e.Property(s => s.BlockedDelta).HasPrecision(18, 4);
+            e.Property(s => s.BlockedOptionLtp).HasPrecision(18, 2);
+            e.Property(s => s.BlockedChangeInOi).HasPrecision(18, 2);
+
+            e.Property(s => s.ScoreDirection).HasMaxLength(4);
 
             // Matches the expected read pattern: WHERE Symbol=? ORDER BY SnapshotTime
             e.HasIndex(s => new { s.Symbol, s.SnapshotTime })

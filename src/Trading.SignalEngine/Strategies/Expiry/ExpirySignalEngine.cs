@@ -71,9 +71,6 @@ public class ExpirySignalEngine
 
         if (!ceQualifies && !peQualifies)
         {
-            _logger.LogDebug(
-                "ExpiryEngine: MarketScore CE:{Ce:F0} PE:{Pe:F0} < {Min:F0} — rejected before option scoring ({Symbol})",
-                ceMarket.Normalized, peMarket.Normalized, settings.ExpiryMinMarketScore, symbol);
             return null;
         }
 
@@ -116,7 +113,6 @@ public class ExpirySignalEngine
 
         if (universe.Count == 0)
         {
-            _logger.LogDebug("ExpiryEngine: no strikes for {Symbol} in mode {Mode}", symbol, mode);
             return null;
         }
 
@@ -133,16 +129,11 @@ public class ExpirySignalEngine
         var heroMarket = hero.OptionType == TradingConst.OptionType.CE ? ceMarket : peMarket;
         if (heroMarket.Normalized < settings.ExpiryMinMarketScore)
         {
-            _logger.LogDebug(
-                "ExpiryEngine: chosen {Type} market score {Score:F0} < {Min:F0} — direction misaligned with gate, rejected ({Symbol})",
-                hero.OptionType, heroMarket.Normalized, settings.ExpiryMinMarketScore, symbol);
             return null;
         }
 
         if (mode == ExpiryMode.GammaBlast && hero.TotalScore <= GammaBlastMinScore)
         {
-            _logger.LogDebug("ExpiryEngine: GammaBlast score {Score:F0} <= {Min:F0} — suppressed ({Symbol})",
-                hero.TotalScore, GammaBlastMinScore, symbol);
             return null;
         }
 
@@ -158,14 +149,6 @@ public class ExpirySignalEngine
         var optionSymbol = !string.IsNullOrWhiteSpace(hero.TradingSymbol)
             ? hero.TradingSymbol
             : $"{symbol}{IstClock.Now:yyMMM}{(int)hero.StrikePrice}{hero.OptionType}".ToUpper();
-
-        _logger.LogInformation(
-            "ExpirySignalEngine: {Mode} {Type} {Symbol} Strike:{Strike} Ltp:{Ltp} Confidence:{Score:F0} " +
-            "(MarketScore:{Market:F0} [EmaTrend:{EmaTrend:F0} Ema5Trend:{Ema5Trend:F0} RSI:{Rsi:F0} PCR:{Pcr:F0} ATR:{Atr:F0} Volume:{MktVol:F0} Price:{Price:F0}] " +
-            "OptionScore:{Option:F0} [Trend:{Trend:F0} Volume:{Vol:F0} Gamma:{Gamma:F0} OiShift:{Oi:F0} Momentum:{Mom:F0} Greeks:{Greeks:F0} Liquidity:{Liq:F0}])",
-            mode, hero.OptionType, symbol, hero.StrikePrice, hero.Ltp, hero.TotalScore,
-            hero.MarketScore, hero.EmaTrendScore, hero.Ema5TrendScore, hero.RsiScore, hero.PcrScore, hero.AtrScore, hero.MarketVolumeScore, hero.PriceChangeScore,
-            hero.OptionScore, hero.TrendScore, hero.VolumeScore, hero.GammaScore, hero.OiShiftScore, hero.PremiumMomentumScore, hero.GreeksScore, hero.LiquidityScore);
 
         // Index SL/T1/T2 — ATR-based via AtrRiskService (replaces the old fixed
         // GetIndexStopPoints() + WithIndexStops() fallback calc). Option-level

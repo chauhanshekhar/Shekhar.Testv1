@@ -293,4 +293,20 @@ public class TradingSettings
     public decimal RsiBearConfirm { get; set; } = 42m;
     public decimal BreakoutVolumeRatio { get; set; } = 1.5m;
     public decimal BreakoutPriceChangeFloorPct { get; set; } = 0.10m;
+
+
+    // =========================
+    // Broker Stop Loss (SL_M)
+    // =========================
+
+    // How long ExitWorker tolerates having no resting broker SL_M order (placement kept
+    // failing) before falling back to a MARKET exit as a last resort. Under normal conditions
+    // this never triggers — the broker order is what protects the position. Kept short (5s,
+    // not 12s) since a slow fallback during expiry-day volatility is itself a risk.
+    public int StopLossFallbackTimeoutSeconds { get; set; } = 5;
+
+    // Caps consecutive SL_M placement attempts per signal — after this many failures,
+    // StopLossOrderCoordinator stops retrying (avoids hammering a broker that's down) and
+    // leaves protection to the MARKET fallback above once price actually crosses OptionSL.
+    public int MaxStopLossRetries { get; set; } = 5;
 }

@@ -33,7 +33,7 @@ public class HeroZeroSignalEngine
 
     private const decimal LotteryMinPremium = 5m;
     private const decimal LotteryMaxPremium = 20m;
-    private const decimal LotteryMinScore = 90m;
+    private const decimal LotteryMinScore = 70m;
 
     public HeroZeroSignalEngine(
         IInstrumentCache instruments,
@@ -84,7 +84,7 @@ public class HeroZeroSignalEngine
 
         decimal minPremium = settings.HeroZeroMinPremium;
         decimal maxPremium = settings.HeroZeroMaxPremium.GetValueOrDefault(symbol, 30m);
-        decimal minScore = 85m;
+        decimal minScore = 70m;
 
         List<OptionChainData> universe;
 
@@ -113,7 +113,6 @@ public class HeroZeroSignalEngine
         {
             if (now < NormalDayStart)
             {
-                _logger.LogDebug("HeroZero: before {Start} — suppressed ({Symbol})", NormalDayStart, symbol);
                 return null;
             }
 
@@ -126,7 +125,6 @@ public class HeroZeroSignalEngine
 
         if (scoringChain.Count == 0)
         {
-            _logger.LogDebug("HeroZero: no strikes in premium band [{Min},{Max}] for {Symbol}", minPremium, maxPremium, symbol);
             return null;
         }
 
@@ -139,15 +137,12 @@ public class HeroZeroSignalEngine
 
         if (result.Decision == HeroZeroDecision.NoTrade)
         {
-            _logger.LogDebug("HeroZero: {Reason} ({Symbol})", result.Reason, symbol);
             return null;
         }
 
         var hero = result.Decision == HeroZeroDecision.BuyCe ? result.HeroCe : result.HeroPe;
         if (hero == null || hero.TotalScore < minScore)
         {
-            _logger.LogDebug("HeroZero: Hero score {Score:F0} < {Min:F0} — suppressed ({Symbol})",
-                hero?.TotalScore ?? 0m, minScore, symbol);
             return null;
         }
 
@@ -156,13 +151,6 @@ public class HeroZeroSignalEngine
         var optionSymbol = !string.IsNullOrWhiteSpace(hero.TradingSymbol)
             ? hero.TradingSymbol
             : $"{symbol}{IstClock.Now:yyMMM}{(int)hero.StrikePrice}{hero.OptionType}".ToUpper();
-
-        _logger.LogInformation(
-            "HeroZeroEngine: {Type} {Symbol} Strike:{Strike} Ltp:{Ltp} Score:{Score:F0} " +
-            "(Trend:{Trend:F0} OI:{Oi:F0} Vol:{Vol:F0} Greeks:{Greeks:F0} Liquidity:{Liq:F0} Momentum:{Mom:F0}) — {Reason}",
-            hero.OptionType, symbol, hero.StrikePrice, hero.Ltp, hero.TotalScore,
-            hero.TrendScore, hero.OiScore, hero.VolumeScore, hero.GreeksScore, hero.LiquidityScore, hero.MomentumScore,
-            result.Reason);
 
         // Index SL/T1/T2 — ATR-based via AtrRiskService, same as SignalEngineService and
         // ExpirySignalEngine (no flag; all three engines share one unconditional path).
@@ -208,9 +196,8 @@ public class HeroZeroSignalEngine
             await _scoreRepo.AddRangeAsync(rows);
             await _uow.SaveChangesAsync();
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            _logger.LogWarning(ex, "HeroZero: failed to persist strike scores — continuing without persistence");
         }
     }
 }

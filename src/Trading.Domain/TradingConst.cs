@@ -28,6 +28,13 @@ public static class TradingConst
         public const string Spread      = "SPREAD";
     }
 
+    // True for signals whose OptionSL tracks a single instrument's LTP (SINGLE/HERO_ZERO) —
+    // eligible for a broker-managed SL_M stop order. False for BULL_SPREAD/BEAR_SPREAD, whose
+    // OptionSL is a net two-leg premium (PositionTrigger: leg1Ltp - leg2Ltp) and can't be
+    // expressed as a single-instrument broker order.
+    public static bool IsSingleLegStrategy(string strategyType) =>
+        strategyType == StrategyType.Single || strategyType == StrategyType.HeroZero;
+
 
     public static class Exchange
     {

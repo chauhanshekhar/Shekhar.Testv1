@@ -46,7 +46,6 @@ public class TickRetentionWorker : BackgroundService
 
             // Sleep until 23:30 IST (30 minutes after market close)
             var delay = TimeUntilNextRun();
-            _logger.LogInformation("TickRetentionWorker sleeping {Hours:F1}h until next run", delay.TotalHours);
             await Task.Delay(delay, stoppingToken);
         }
     }
@@ -62,15 +61,12 @@ public class TickRetentionWorker : BackgroundService
         var candle1mCutoff = IstClock.Now.AddDays(-180);   // 6 months
         var optionCutoff = IstClock.Now.AddDays(-90);
 
-        var deletedTicks = await tickRepo.ExecuteDeleteAsync(t => t.TickTime < tickCutoff);
-        _logger.LogInformation("Retention: deleted {N} MarketTick rows older than 7d", deletedTicks);
+        await tickRepo.ExecuteDeleteAsync(t => t.TickTime < tickCutoff);
 
-        var deleted1m = await candleRepo.ExecuteDeleteAsync(
+        await candleRepo.ExecuteDeleteAsync(
             c => c.Symbol.EndsWith("_1m") && c.CandleTime < candle1mCutoff);
-        _logger.LogInformation("Retention: deleted {N} 1m Candle rows older than 6mo", deleted1m);
 
-        var deletedOc = await optionRepo.ExecuteDeleteAsync(o => o.CreatedOn < optionCutoff);
-        _logger.LogInformation("Retention: deleted {N} OptionChainData rows older than 90d", deletedOc);
+        await optionRepo.ExecuteDeleteAsync(o => o.CreatedOn < optionCutoff);
     }
 
     private static TimeSpan TimeUntilNextRun()

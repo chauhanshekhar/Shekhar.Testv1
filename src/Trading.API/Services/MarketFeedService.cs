@@ -33,7 +33,6 @@ public class MarketFeedService : BackgroundService
 
         if (instruments.Count == 0)
         {
-            _logger.LogWarning("OptionChainWorker: no active instruments in TradingInstruments table — skipping");
             return;
         }
         await _feed.StartAsync(instruments.ToList(), stoppingToken);

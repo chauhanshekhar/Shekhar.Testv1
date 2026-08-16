@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Query;
 using Trading.Infrastructure.Data;
 
 namespace Trading.Infrastructure.Repositories;
@@ -82,6 +83,11 @@ public class Repository<T> : IRepository<T>
     /// </summary>
     public async Task<int> ExecuteDeleteAsync(Expression<Func<T, bool>> predicate)
         => await _db.Set<T>().Where(predicate).ExecuteDeleteAsync();
+
+    public async Task<int> ExecuteUpdateAsync(
+        Expression<Func<T, bool>> predicate,
+        Action<UpdateSettersBuilder<T>> setPropertyCalls)
+        => await _db.Set<T>().Where(predicate).ExecuteUpdateAsync(setPropertyCalls);
 
     public async Task<int> CountAsync(Expression<Func<T, bool>> predicate)
         => await _db.Set<T>().CountAsync(predicate);

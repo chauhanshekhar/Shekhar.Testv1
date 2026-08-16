@@ -58,10 +58,6 @@ public class MarketFeedWorker : BackgroundService
             {
                 if (!MarketHours.IsOpen())
                 {
-                    _logger.LogInformation(
-                        "Market closed. Waiting... Current IST: {Time}",
-                        IstClock.Now);
-
                     await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
                     continue;
                 }
@@ -70,16 +66,9 @@ public class MarketFeedWorker : BackgroundService
 
                 if (instruments.Count == 0)
                 {
-                    _logger.LogWarning(
-                        "MarketFeedWorker: no active instruments.");
-
                     await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
                     continue;
                 }
-
-                _logger.LogInformation(
-                    "MarketFeedWorker starting feed for {Count} instruments",
-                    instruments.Count);
 
                 var batchTask = BatchFlushLoopAsync(stoppingToken);
 
@@ -185,7 +174,6 @@ public class MarketFeedWorker : BackgroundService
             if (dropped > 0)
             {
                 var total = Interlocked.Add(ref _droppedTicksTotal, dropped);
-                _logger.LogWarning("MarketFeedWorker — {Count} ticks dropped (channel full, total today: {Total})", dropped, total);
 
                 if (dropped >= DropAlertThreshold)
                     await _alerts.SendCriticalAsync(
@@ -208,8 +196,6 @@ public class MarketFeedWorker : BackgroundService
 
                     await repo.StageRangeAsync(batch);
                     await uow.SaveChangesAsync();
-
-                    _logger.LogDebug("Saved {Count} ticks to DB", batch.Count);
                 }
                 catch (Exception ex)
                 {

@@ -103,29 +103,23 @@ public class MarketRegimeService
                 ? MarketVolatility.High
                 : MarketVolatility.Low;
 
-        var last5 =
-            orderedCandles
-            .TakeLast(5)
-            .ToList();
-
-        var bullish =
-            last5.Count(x => x.Close > x.Open);
-
-        var bearish =
-            last5.Count(x => x.Close < x.Open);
-
         var lastClose =
             orderedCandles.Last().Close;
 
         MarketTrend trend;
 
-        if (ema20 > ema50 * 1.0005m ||
-            (bullish >= 4 && lastClose > ema20))
+
+        const decimal BufferPercent = 0.0002m; // 0.02%
+
+        var emaBuffer = ema50 * BufferPercent;
+
+        if (ema20 > ema50 + emaBuffer &&
+            lastClose > ema20)
         {
             trend = MarketTrend.Uptrend;
         }
-        else if (ema20 < ema50 * 0.9995m ||
-                 (bearish >= 4 && lastClose < ema20))
+        else if (ema20 < ema50 - emaBuffer &&
+                 lastClose < ema20)
         {
             trend = MarketTrend.Downtrend;
         }
@@ -133,7 +127,6 @@ public class MarketRegimeService
         {
             trend = MarketTrend.Sideways;
         }
-
         bool isGapUp = false;
         bool isGapDown = false;
 
@@ -175,21 +168,13 @@ public class MarketRegimeService
     public static bool IsTradeAllowed(
         MarketRegime regime)
     {
-        //if (regime.Volatility == MarketVolatility.Low ||
-        //    regime.Volatility == MarketVolatility.Extreme)
-        //{
-        //    return false;
-        //}
-        if (regime.Volatility == MarketVolatility.Low)
-        {
-            return false;
-        }
 
-        if (regime.Trend ==
-            MarketTrend.Sideways)
+        if (regime.Volatility == MarketVolatility.Low ||
+            regime.Volatility == MarketVolatility.Extreme)
         {
             return false;
         }
+        
 
         if (regime.IsExpiryDay &&
         IstClock.Now.TimeOfDay < new TimeSpan(9, 30, 0))

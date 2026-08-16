@@ -44,7 +44,6 @@ public class WhatsAppWorker : BackgroundService
     {
         if (string.IsNullOrWhiteSpace(_apiUrl) || string.IsNullOrWhiteSpace(_from) || string.IsNullOrWhiteSpace(_to))
         {
-            _logger.LogWarning("WhatsApp not configured — WhatsAppWorker idle.");
             return;
         }
 
@@ -125,7 +124,6 @@ public class WhatsAppWorker : BackgroundService
 
             var response = await _http.PostAsync(_apiUrl, content);
             response.EnsureSuccessStatusCode();
-            _logger.LogInformation("WhatsApp alert sent");
         }
         catch (Exception ex)
         {

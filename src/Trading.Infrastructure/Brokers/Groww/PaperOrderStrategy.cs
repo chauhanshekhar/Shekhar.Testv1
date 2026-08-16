@@ -46,7 +46,7 @@ public class PaperOrderStrategy : IOrderStrategy
         return $"PAPER-{trade.Id}";
     }
 
-    public async Task<string> ClosePositionAsync(Signal signal, string reason, int? lotsToClose = null)
+    public async Task<string> ClosePositionAsync(Signal signal, string reason, int? lotsToClose = null, string? orderReferenceId = null)
     {
         var exitPrice = signal.OptionLtp > 0 ? signal.OptionLtp : signal.EntryPrice;
         var symbol = !string.IsNullOrEmpty(signal.OptionSymbol)
@@ -95,6 +95,8 @@ public class PaperOrderStrategy : IOrderStrategy
     }
 
     // Paper mode has no real open orders on broker side — these are all no-ops.
+    public Task<string> PlaceStopLossOrderAsync(Signal signal, decimal triggerPrice, int lots, string orderReferenceId)
+        => Task.FromResult($"PAPER-SL-{signal.Id}");
     public Task<bool> CancelOrderAsync(string orderId) => Task.FromResult(true);
     public Task<bool> ModifyOrderAsync(string orderId, decimal price) => Task.FromResult(true);
     public Task<List<string>> GetOpenOrdersAsync() => Task.FromResult(new List<string>());

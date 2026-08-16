@@ -223,10 +223,6 @@ public class DailyPnlWorker : BackgroundService
         }
 
         await uow.SaveChangesAsync();
-
-        _logger.LogInformation(
-            "DailyPnL {Date:d}: Realized ₹{R:N0} | Unrealized ₹{U:N0} | DD ₹{DD:N0} | Win {Win}/{Total} ({Rate:F1}%)",
-            today, realizedPnl, unrealizedPnl, dailyDrawdown, winTrades, trades.Count, winRate);
     }
 
     // ── Max Drawdown ──────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ using Trading.Domain.Entities;
 using Trading.Infrastructure;
 using Trading.Infrastructure.Repositories;
 using Trading.Infrastructure.Services;
+using Trading.SignalEngine.Services;
 
 namespace Trading.Worker;
 
@@ -26,6 +27,7 @@ public class BrokerPositionSyncWorker : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ITradingAlertService _alerts;
     private readonly AppErrorLogger _errorLogger;
+    private readonly StopLossOrderCoordinator _stopLossCoordinator;
 
     // Only reconcile signals created in this window — avoids scanning full history
     private static readonly TimeSpan ReconcileWindow = TimeSpan.FromHours(8);
@@ -34,18 +36,18 @@ public class BrokerPositionSyncWorker : BackgroundService
         ILogger<BrokerPositionSyncWorker> logger,
         IServiceScopeFactory scopeFactory,
         ITradingAlertService alerts,
-        AppErrorLogger errorLogger)
+        AppErrorLogger errorLogger,
+        StopLossOrderCoordinator stopLossCoordinator)
     {
         _logger = logger;
         _scopeFactory = scopeFactory;
         _alerts = alerts;
         _errorLogger = errorLogger;
+        _stopLossCoordinator = stopLossCoordinator;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("BrokerPositionSyncWorker started");
-
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -68,12 +70,21 @@ public class BrokerPositionSyncWorker : BackgroundService
         var sp           = scope.ServiceProvider;
         var signalRepo   = sp.GetRequiredService<IRepository<Signal>>();
         var positionRepo = sp.GetRequiredService<IRepository<Position>>();
+        var orderRepo    = sp.GetRequiredService<IRepository<Order>>();
         var portfolio    = sp.GetRequiredService<IGrowwPortfolioService>();
+        var orders       = sp.GetRequiredService<IOrderService>();
         var uow          = sp.GetRequiredService<IUnitOfWork>();
         var instruments  = sp.GetRequiredService<IInstrumentCache>();
 
         // Load open DB signals from last 8 hours
         var windowStart = IstClock.Now - ReconcileWindow;
+
+        // ── Broker-managed SL_M gap recovery ──────────────────────────────────
+        // Covers a crash/restart (or a retry cap that was hit) between a position going ACTIVE
+        // and its SL_M actually being placed — an open STRATEGY position must never sit
+        // unprotected. Runs every cycle (cheap: no-ops once StopLossOrderId is set), not just
+        // at startup, so it also catches a signal ExitWorker's self-heal hasn't gotten to yet.
+        await RecoverMissingStopLossOrdersAsync(signalRepo, orderRepo, orders, uow, windowStart);
         var dbSignals = await signalRepo.FindAsync(
  s => s.CreatedOn >= windowStart
  &&
@@ -91,14 +102,12 @@ public class BrokerPositionSyncWorker : BackgroundService
         {
             brokerPositions = await portfolio.GetPositionsAsync();
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            _logger.LogWarning(ex, "BrokerPositionSyncWorker: could not fetch broker positions — skipping reconcile");
             return;
         }
 
         var brokerSymbols = brokerPositions
-            .Where(p => p.Quantity != 0)
             .Select(p => p.TradingSymbol)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -114,9 +123,6 @@ public class BrokerPositionSyncWorker : BackgroundService
                 // PENDING + no broker position = order never sent (crash between save and PlaceOrderAsync)
                 if (!hasBrokerPosition)
                 {
-                    _logger.LogWarning(
-                        "BrokerSync: signal {Id} {Symbol} stuck PENDING with no broker position — marking ORDER_REJECTED",
-                        signal.Id, signal.Symbol);
                     signal.Status = SignalStatus.OrderRejected;
                     anyChange = true;
                 }
@@ -126,9 +132,6 @@ public class BrokerPositionSyncWorker : BackgroundService
                 if (!hasBrokerPosition)
                 {
                     // ORDER_PLACED + no broker position = position closed outside app
-                    _logger.LogWarning(
-                        "BrokerSync: signal {Id} {Symbol} ORDER_PLACED but no broker position found — position may have been closed externally",
-                        signal.Id, signal.Symbol);
                     await _alerts.SendCriticalAsync(
                         $"BrokerSync: {signal.Symbol} signal #{signal.Id} has no broker position. " +
                         $"Position may have been closed outside the app. Check broker dashboard.");
@@ -149,9 +152,6 @@ public class BrokerPositionSyncWorker : BackgroundService
 
                         if (expectedContracts > 0 && actualContracts != expectedContracts)
                         {
-                            _logger.LogWarning(
-                                "BrokerSync: signal {Id} {Symbol} qty mismatch — DB={Expected} contracts, Broker={Actual} contracts",
-                                signal.Id, signal.Symbol, expectedContracts, actualContracts);
                             await _alerts.SendCriticalAsync(
                                 $"BrokerSync: {signal.Symbol} signal #{signal.Id} QUANTITY MISMATCH. " +
                                 $"DB expects {expectedContracts} contracts, broker shows {actualContracts}. " +
@@ -169,8 +169,18 @@ public class BrokerPositionSyncWorker : BackgroundService
         // Restricted to SignalId == null — these are the BROKER_SYNC rows this worker owns.
         // STRATEGY rows (SignalId set, created by BrokerOrderSyncWorker on fill) are never
         // matched/overwritten here, even when they share the same option Symbol.
+        // Keyed by OptionSymbol (the broker's own trading_symbol) — the true 1:1 broker
+        // identifier. Rows with no OptionSymbol yet (pre-fix legacy data) are excluded from
+        // the lookup rather than risking a duplicate-key crash; they just get re-created
+        // correctly below instead of being matched/updated in place.
         var existingPositions = (await positionRepo.FindAsync(p => p.SignalId == null))
-            .ToDictionary(p => p.Symbol, StringComparer.OrdinalIgnoreCase);
+            .Where(p => !string.IsNullOrEmpty(p.OptionSymbol))
+            .ToDictionary(p => p.OptionSymbol, StringComparer.OrdinalIgnoreCase);
+
+        // Snapshot once — GetActive() is a cheap field read, but resolving the underlying
+        // per broker position would otherwise re-run the same Select/Where/OrderBy over it
+        // for every row.
+        var activeInstruments = instruments.GetActive();
 
         foreach (var bp in brokerPositions)
         {
@@ -191,7 +201,8 @@ public class BrokerPositionSyncWorker : BackgroundService
             {
                 await positionRepo.AddAsync(new Position
                 {
-                    Symbol         = bp.TradingSymbol,
+                    Symbol         = ResolveUnderlying(bp.TradingSymbol, activeInstruments),
+                    OptionSymbol   = bp.TradingSymbol,
                     Quantity       = bp.Quantity ?? 0,
                     AvgPrice       = avgPrice,
                     CurrentPrice   = currentPrice,
@@ -215,9 +226,6 @@ public class BrokerPositionSyncWorker : BackgroundService
 
             if (brokerMatch is null || brokerQty != sp2.Quantity)
             {
-                _logger.LogWarning(
-                    "BrokerSync: STRATEGY position {Id} {OptionSymbol} qty={Qty} does not match broker ({BrokerQty}) — not auto-corrected",
-                    sp2.Id, sp2.OptionSymbol, sp2.Quantity, brokerQty);
                 await _errorLogger.LogWarningAsync(
                     "BrokerPositionSyncWorker",
                     new InvalidOperationException(
@@ -233,7 +241,7 @@ public class BrokerPositionSyncWorker : BackgroundService
             .Select(p => p.TradingSymbol)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var pos in existingPositions.Values.Where(p => !brokerSymbolSet.Contains(p.Symbol)))
+        foreach (var pos in existingPositions.Values.Where(p => !brokerSymbolSet.Contains(p.OptionSymbol)))
         {
             pos.Quantity     = 0;
             pos.CurrentPrice = 0;
@@ -254,11 +262,61 @@ public class BrokerPositionSyncWorker : BackgroundService
         {
             if (!dbOptionSymbols.Contains(pos.TradingSymbol))
             {
-                _logger.LogWarning(
-                    "BrokerSync: orphan position detected — {Symbol} qty={Qty} has no matching DB signal",
-                    pos.TradingSymbol, pos.Quantity);
                 await _alerts.SendCriticalAsync(
                     $"BrokerSync: Orphan position {pos.TradingSymbol} (qty={pos.Quantity}) found on broker with no matching signal in DB.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Maps a broker option contract symbol (e.g. "BANKNIFTY26AUG57600PE") to its underlying
+    /// ("BANKNIFTY") via longest-prefix match against the active instrument list — Groww's
+    /// position payload has no separate underlying field, only the contract's trading_symbol.
+    /// Falls back to the raw broker symbol if no active instrument matches, rather than
+    /// throwing, so one bad/inactive symbol can't take down the whole reconcile cycle.
+    /// </summary>
+    private static string ResolveUnderlying(string brokerSymbol, IReadOnlyList<TradingInstrument> activeInstruments) =>
+        activeInstruments
+            .Select(i => i.Symbol)
+            .Where(sym => brokerSymbol.StartsWith(sym, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(sym => sym.Length)
+            .FirstOrDefault() ?? brokerSymbol;
+
+    /// <summary>
+    /// Recreates a missing broker-managed SL_M for any ACTIVE single-leg signal that doesn't
+    /// have one — the gap this covers is a crash/restart between BUY-complete and SL_M
+    /// placement (or a placement that exhausted ExitWorker's retry cap while the app was down,
+    /// so nothing was left running to self-heal it). An open position with no resting broker
+    /// stop is exactly the failure mode this whole redesign exists to prevent, so it must never
+    /// be left for "the next trailing-SL move" to notice.
+    /// </summary>
+    private async Task RecoverMissingStopLossOrdersAsync(
+        IRepository<Signal> signalRepo,
+        IRepository<Order> orderRepo,
+        IOrderService orders,
+        IUnitOfWork uow,
+        DateTime windowStart)
+    {
+        if (orders.CurrentMode == TradingMode.Paper) return;
+
+        var unprotected = await signalRepo.FindAsync(
+            s => s.CreatedOn >= windowStart
+              && s.Status == SignalStatus.Active
+              && s.OptionSL > 0
+              && s.StopLossOrderId == "");
+
+        foreach (var signal in unprotected.Where(s => TradingConst.IsSingleLegStrategy(s.StrategyType)))
+        {
+            _logger.LogWarning(
+                "Recovering missing SL_M for signal {Id} {Symbol} (StopLossStatus={Status}, RetryCount={Retries}) — likely a restart/crash gap",
+                signal.Id, signal.Symbol, signal.StopLossStatus, signal.StopLossRetryCount);
+
+            var qty = signal.RemainingQty > 0 ? signal.RemainingQty : signal.Quantity;
+            var placed = await _stopLossCoordinator.TryPlaceAsync(signal, signal.OptionSL, qty, orders, orderRepo, signalRepo, uow);
+            if (!placed)
+            {
+                await _alerts.SendCriticalAsync(
+                    $"BrokerPositionSync: could not recover SL_M for signal #{signal.Id} ({signal.Symbol}) — position remains unprotected at broker level (StopLossRetryCount={signal.StopLossRetryCount}).");
             }
         }
     }

@@ -42,8 +42,8 @@ public static class MarketHours
     public static readonly TimeSpan SessionOpen  = new(9, 15, 0);
     public static readonly TimeSpan SessionClose = new(15, 30, 0);
     public static readonly TimeSpan SignalOpen   = new(9, 25, 0);
-    public static readonly TimeSpan SignalClose  = new(15, 10, 0);
-    public static readonly TimeSpan ForceExit    = new(15, 20, 0);
+    public static readonly TimeSpan SignalClose  = new(15, 15, 0);
+    public static readonly TimeSpan ForceExit    = new(15, 25, 0);
 
     public static bool IsOpen()
     {

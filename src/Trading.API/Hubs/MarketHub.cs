@@ -13,13 +13,11 @@ public class MarketHub : Hub
 
     public override async Task OnConnectedAsync()
     {
-        _logger.LogDebug("Client connected: {ConnectionId}", Context.ConnectionId);
         await base.OnConnectedAsync();
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        _logger.LogDebug("Client disconnected: {ConnectionId}", Context.ConnectionId);
         await base.OnDisconnectedAsync(exception);
     }
 

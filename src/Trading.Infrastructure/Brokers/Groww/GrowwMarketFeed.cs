@@ -38,8 +38,6 @@ public class GrowwMarketFeed : IMarketDataFeed
      .Select(s => $"{s.Exchange}_{s.Symbol}")
      .ToList();
 
-        _logger.LogInformation("GrowwMarketFeed — polling {Count} symbol(s)", symbolList.Count);
-
         while (!ct.IsCancellationRequested)
         {
             try
@@ -63,9 +61,8 @@ public class GrowwMarketFeed : IMarketDataFeed
             {
                 break;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                _logger.LogWarning(ex, "GrowwMarketFeed — poll error; retrying in 5 s");
                 try { await Task.Delay(5_000, ct); } catch (OperationCanceledException) { break; }
                 continue;
             }
@@ -73,8 +70,6 @@ public class GrowwMarketFeed : IMarketDataFeed
             try { await Task.Delay(PollInterval, ct); }
             catch (OperationCanceledException) { break; }
         }
-
-        _logger.LogInformation("GrowwMarketFeed — stopped");
     }
 
     public Task StopAsync() => Task.CompletedTask;

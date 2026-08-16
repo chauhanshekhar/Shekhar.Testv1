@@ -5,7 +5,7 @@ namespace Trading.SignalEngine.Scoring.Ranking;
 /// <summary>Ranks each side by TotalScore and decides BuyCe / BuyPe / NoTrade.</summary>
 public class StrikeRankingService
 {
-    private const decimal BuyThreshold = 85m;
+    private const decimal BuyThreshold = 70m;
     private const decimal OppositeSideCap = 50m;
 
     public HeroZeroResult Rank(List<StrikeScore> ceScores, List<StrikeScore> peScores)

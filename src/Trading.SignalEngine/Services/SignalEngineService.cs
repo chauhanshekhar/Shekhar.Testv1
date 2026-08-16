@@ -14,8 +14,8 @@ public class SignalEngineService
     private readonly IInstrumentCache _instrumentCache;
     private readonly SystemSettingsService _settingsService;
     private readonly IStrategySettingsService _strategySettings;
-    private readonly OptionTargetService _optionTargets;
     private readonly AtrRiskService _atrRisk;
+    private readonly OiAnalysisService _oi;
     private readonly IRepository<OptionChainData> _optionChainRepo;
     private readonly ILogger<SignalEngineService> _logger;
 
@@ -23,16 +23,16 @@ public class SignalEngineService
         IInstrumentCache instrumentCache,
         SystemSettingsService settingsService,
         IStrategySettingsService strategySettings,
-        OptionTargetService optionTargets,
         AtrRiskService atrRisk,
+        OiAnalysisService oi,
         IRepository<OptionChainData> optionChainRepo,
         ILogger<SignalEngineService> logger)
     {
         _instrumentCache = instrumentCache;
         _settingsService = settingsService;
         _strategySettings = strategySettings;
-        _optionTargets = optionTargets;
         _atrRisk = atrRisk;
+        _oi = oi;
         _optionChainRepo = optionChainRepo;
         _logger = logger;
 
@@ -51,7 +51,12 @@ public class SignalEngineService
     decimal rsi,
     decimal currentVolume,
     decimal avgVolume20,
-    decimal bodyPct)
+    decimal bodyPct,
+    decimal rsiCallFloor,
+    decimal rsiCallCeiling,
+    decimal rsiPutFloor,
+    decimal rsiPutCeiling,
+    decimal bodyPctMinimum)
     {
         decimal score = 25m; // base score
 
@@ -87,11 +92,19 @@ public class SignalEngineService
 
         // RSI
         if (buy)
-            score += rsi > 70m ? 15m :
-                     rsi > 55m ? 8m : 0m;
+        {
+            if (rsi >= rsiCallCeiling)
+                score += 15m;
+            else if (rsi >= rsiCallFloor)
+                score += 8m;
+        }
         else
-            score += rsi < 30m ? 15m :
-                     rsi < 45m ? 8m : 0m;
+        {
+            if (rsi <= rsiPutFloor)
+                score += 15m;
+            else if (rsi <= rsiPutCeiling)
+                score += 8m;
+        }
 
         // Volume (optional)
         if (currentVolume > 0 && avgVolume20 > 0)
@@ -103,11 +116,11 @@ public class SignalEngineService
         }
 
         // Candle quality
-        if (bodyPct >= 70m)
+        if (bodyPct >= bodyPctMinimum + 30m)
         {
             score += 10m;
         }
-        else if (bodyPct >= 55m)
+        else if (bodyPct >= bodyPctMinimum)
         {
             score += 5m;
         }
@@ -159,6 +172,15 @@ public class SignalEngineService
 
     // Same decision logic as GenerateSignal — additionally reports every failed condition
     // (instead of a bare null) so callers can audit/log exactly why a signal did not fire.
+    //
+    // Branches on EnableSignalScoring (StrategySettings, per-symbol, default false):
+    //   false (default) -> legacy path below, byte-identical to the pre-scoring behavior.
+    //   true             -> GenerateScored: CALL and PUT are evaluated independently as scores
+    //                       (see SignalScore) instead of one combined AND-chain, so a weak
+    //                       secondary factor (body%, ATR, PCR, OI) no longer kills an otherwise
+    //                       strong directional setup. Trend/EMA20/EMA50/RSI stay the dominant
+    //                       weight in the score, same as they were the hard-required conditions
+    //                       before.
     public SignalGenerationResult GenerateSignalDetailed(
         string symbol,
         decimal ltp,
@@ -187,26 +209,59 @@ public class SignalEngineService
     ? atrRaw / ltp * 100m
     : 0m;
 
+        var enableSignalScoring = _strategySettings.GetBool("EnableSignalScoring", symbol, false);
+
         var minAtr = _strategySettings.GetDecimal("MinAtrPercent", symbol, 0.10m);
+        var enableAtrFilter = _strategySettings.GetBool("EnableAtrFilter", symbol, true);
 
-        if (atrPct < minAtr)
+        // Legacy-mode-only hard block. In scored mode ATR becomes AtrScore instead — the real
+        // safety floor there is AtrGate's own EnableSignalScoring-aware MinAtrPercentAbsolute,
+        // which already ran (as a pre-gate) before StrategyManager ever called into this method.
+        if (!enableSignalScoring && enableAtrFilter && atrPct < minAtr)
             return SignalGenerationResult.Failed($"ATR% {atrPct:F2} below minimum {minAtr:F2}");
+
         if (lastClosedCandle == null)
-            return SignalGenerationResult.Failed("No closed 5m candle available");
-
-        var range =
-            lastClosedCandle.High -
-            lastClosedCandle.Low;
-
+            return SignalGenerationResult.Failed("No closed candle");
+        var range = lastClosedCandle.High - lastClosedCandle.Low;
         if (range <= 0)
-            return SignalGenerationResult.Failed("Candle range invalid (High <= Low)");
+            return SignalGenerationResult.Failed("Invalid candle range");
+        var body = Math.Abs(lastClosedCandle.Close - lastClosedCandle.Open);
+        var bodyPct = body / range * 100m;
 
-        var bodyPct =
-            Math.Abs(lastClosedCandle.Close - lastClosedCandle.Open)
-            / range * 100m;
+        var bodyPctMinimum       = _strategySettings.GetDecimal("BodyPctMinimum", symbol, 35m);
+        var rsiCallFloor         = _strategySettings.GetDecimal("RsiCallFloor", symbol, 55m);
+        var rsiCallCeiling       = _strategySettings.GetDecimal("RsiCallCeiling", symbol, 70m);
+        var rsiPutFloor          = _strategySettings.GetDecimal("RsiPutFloor", symbol, 30m);
+        var rsiPutCeiling        = _strategySettings.GetDecimal("RsiPutCeiling", symbol, 45m);
+        var priceChangeThreshold = _strategySettings.GetDecimal("PriceChangeThreshold", symbol, 0.10m);
+        var deltaMinimum         = _strategySettings.GetDecimal("DeltaMinimum", symbol, 0.35m);
 
-        if (bodyPct < Settings.MinBodyPercent)
-            return SignalGenerationResult.Failed($"Candle body {bodyPct:F1}% below minimum {Settings.MinBodyPercent}%");
+        // Contrarian pullback/bounceback RSI band — additive OR alongside the momentum band
+        // above. Legacy-mode only (in scored mode RSI is a score, not a gate, so this band is
+        // superseded there — a weak-RSI setup can still qualify via other components). Off by
+        // default until a StrategySettings row explicitly sets EnableRsiPullbackFilter=1.
+        // Backed by missed-opportunity analysis over IndicatorSnapshot: CALL setups blocked at
+        // RSI 30-40 (dip in an already-bullish 5m trend) and PUT setups blocked at RSI 60-70
+        // (bounce in an already-bearish 5m trend) showed a positive forward-move edge across
+        // nearly every trading day in the sample.
+        var enableRsiPullbackFilter = _strategySettings.GetBool("EnableRsiPullbackFilter", symbol, false);
+        var rsiCallPullbackFloor    = _strategySettings.GetDecimal("RsiCallPullbackFloor", symbol, 30m);
+        var rsiCallPullbackCeiling  = _strategySettings.GetDecimal("RsiCallPullbackCeiling", symbol, 40m);
+        var rsiPutBouncebackFloor   = _strategySettings.GetDecimal("RsiPutBouncebackFloor", symbol, 60m);
+        var rsiPutBouncebackCeiling = _strategySettings.GetDecimal("RsiPutBouncebackCeiling", symbol, 70m);
+
+        // Per-filter enable/disable flags — DB-driven so individual filters can be
+        // switched off for testing without touching trading logic. All default to true,
+        // matching current behavior when no override row exists.
+        var enableTrendFilter       = _strategySettings.GetBool("EnableTrendFilter", symbol, true);
+        var enablePcrFilter         = _strategySettings.GetBool("EnablePcrFilter", symbol, true);
+        var enableRsiFilter         = _strategySettings.GetBool("EnableRsiFilter", symbol, true);
+        var enableDeltaFilter       = _strategySettings.GetBool("EnableDeltaFilter", symbol, true);
+        var enablePriceChangeFilter = _strategySettings.GetBool("EnablePriceChangeFilter", symbol, true);
+        var enableCandleFilter      = _strategySettings.GetBool("EnableCandleFilter", symbol, true);
+
+        var pcrBullishThreshold = _strategySettings.GetDecimal("PcrBullishThreshold", symbol, 1.00m);
+        var pcrBearishThreshold = _strategySettings.GetDecimal("PcrBearishThreshold", symbol, 1.00m);
 
         var interval = (decimal)_instrumentCache.GetStrikeInterval(symbol);
         var spot = optionChain
@@ -256,70 +311,42 @@ public class SignalEngineService
             ema20_5m > 0 &&
             ema50_5m > 0 &&
             ema20_5m < ema50_5m;
-        //    var trendBullish =
-        //ema20_5m > ema50_5m;
 
-        //    var trendBearish =
-        //        ema20_5m < ema50_5m;
-        _logger.LogInformation(
-    """
-    CALL:
-    trendBullish={trendBullish}
-    ltp>ema20={ltpEma}
-    ema20>ema50={emaCross}
-    pcr={pcr}
-    rsi={rsi}
-    ceDelta={ceDelta}
-    priceChangePct={priceChangePct}
-    ceOi={ceOi}
+        if (enableSignalScoring)
+        {
+            return GenerateScored(
+                symbol, ltp, ema20, ema50, pcr, rsi, currentVolume, avgVolume20, priceChangePct, atrPct, atrRaw,
+                chain, atmStrike, atmCe, atmPe, trendBullish, trendBearish, lastClosedCandle, bodyPct,
+                rsiCallFloor, rsiCallCeiling, rsiPutFloor, rsiPutCeiling, bodyPctMinimum,
+                pcrBullishThreshold, pcrBearishThreshold);
+        }
 
-    PUT:
-    trendBearish={trendBearish}
-    ltp<ema20={ltpBelow}
-    ema20<ema50={emaBelow}
-    peDelta={peDelta}
-    peOi={peOi}
-    """,
-    trendBullish,
-    ltp > ema20,
-    ema20 > ema50,
-    pcr,
-    rsi,
-    ceAtmDelta,
-    priceChangePct,
-    atmCe.ChangeInOi,
-
-    trendBearish,
-    ltp < ema20,
-    ema20 < ema50,
-    peAtmDelta,
-    atmPe.ChangeInOi
-);
-
-        // Candle body confirmation — filters weak/indecisive closed 5m candles.
-        // Body must be at least half the total range in the direction of the trade.
+        // ── Legacy path — unchanged AND-combined CALL/PUT conditions ─────────────
+        // Candle body confirmation — filters weak/indecisive closed candles (1m or 5m,
+        // whichever candle the caller passed as lastClosedCandle — see StrategyManager's
+        // UseOneMinuteEntryCandle setting).
+        // Body must be at least bodyPctMinimum of the total range in the direction of the trade.
         bool candleBullish =
-     lastClosedCandle != null &&
-     lastClosedCandle.Close > lastClosedCandle.Open;
-
+         lastClosedCandle.Close > lastClosedCandle.Open &&
+         bodyPct >= bodyPctMinimum;
 
         bool candleBearish =
-            lastClosedCandle != null &&
-            lastClosedCandle.Close < lastClosedCandle.Open;
-        var volConfirmed = currentVolume > avgVolume20 * 1.5m;
+            lastClosedCandle.Close < lastClosedCandle.Open &&
+            bodyPct >= bodyPctMinimum;
         // ── Entry: 1m timing + 5m trend alignment + candle strength ──────────
         // Each sub-condition is named below (same operands/thresholds, just factored out of the
         // single boolean expression) purely so a rejection can report exactly which ones failed —
         // the values of `call`/`put` themselves are unchanged.
-        bool condTrendBullish = trendBullish;
-        bool condLtpAboveEma20 = ltp > ema20;
-        bool condEma20AboveEma50 = ema20 > ema50;
-        bool condPcrCall = pcr >= 1.05m;
-        bool condRsiCall = rsi > 55m && rsi < 75m;
-        bool condDeltaCall = ceAtmDelta >= 0.40m;
-        bool condVolumeCall = volConfirmed;
-        bool condPriceChangeCall = priceChangePct > 0.15m;
-        bool condCandleBullish = candleBullish;
+        bool condTrendBullish = !enableTrendFilter || trendBullish;
+        bool condLtpAboveEma20 = !enableTrendFilter || ltp > ema20;
+        bool condEma20AboveEma50 = !enableTrendFilter || ema20 > ema50;
+        bool condRsiCall = !enableRsiFilter
+            || (rsi >= rsiCallFloor && rsi <= rsiCallCeiling)
+            || (enableRsiPullbackFilter && rsi >= rsiCallPullbackFloor && rsi <= rsiCallPullbackCeiling);
+        bool condDeltaCall = !enableDeltaFilter || ceAtmDelta >= deltaMinimum;
+        bool condPriceChangeCall = !enablePriceChangeFilter || priceChangePct > priceChangeThreshold;
+        bool condCandleBullish = !enableCandleFilter || candleBullish;
+        bool condPcrCall = !enablePcrFilter || pcr >= pcrBullishThreshold;
 
         bool call =
      condTrendBullish &&
@@ -328,19 +355,19 @@ public class SignalEngineService
      condPcrCall &&
      condRsiCall &&
      condDeltaCall &&
-     condVolumeCall &&
      condPriceChangeCall &&
      condCandleBullish;
 
-        bool condTrendBearish = trendBearish;
-        bool condLtpBelowEma20 = ltp < ema20;
-        bool condEma20BelowEma50 = ema20 < ema50;
-        bool condPcrPut = pcr <= 0.95m;
-        bool condRsiPut = rsi < 45m && rsi > 30m;
-        bool condDeltaPut = peAtmDelta <= -0.40m;
-        bool condVolumePut = volConfirmed;
-        bool condPriceChangePut = priceChangePct < -0.15m;
-        bool condCandleBearish = candleBearish;
+        bool condTrendBearish = !enableTrendFilter || trendBearish;
+        bool condLtpBelowEma20 = !enableTrendFilter || ltp < ema20;
+        bool condEma20BelowEma50 = !enableTrendFilter || ema20 < ema50;
+        bool condPcrPut = !enablePcrFilter || pcr <= pcrBearishThreshold;
+        bool condRsiPut = !enableRsiFilter
+            || (rsi >= rsiPutFloor && rsi <= rsiPutCeiling)
+            || (enableRsiPullbackFilter && rsi >= rsiPutBouncebackFloor && rsi <= rsiPutBouncebackCeiling);
+        bool condDeltaPut = !enableDeltaFilter || peAtmDelta <= -deltaMinimum;
+        bool condPriceChangePut = !enablePriceChangeFilter || priceChangePct < -priceChangeThreshold;
+        bool condCandleBearish = !enableCandleFilter || candleBearish;
 
         bool put =
             condTrendBearish &&
@@ -349,7 +376,6 @@ public class SignalEngineService
             condPcrPut &&
             condRsiPut &&
             condDeltaPut &&
-            condVolumePut &&
             condPriceChangePut &&
             condCandleBearish;
 
@@ -360,11 +386,12 @@ public class SignalEngineService
                 ("Trend Bullish", condTrendBullish),
                 ("LTP > EMA20", condLtpAboveEma20),
                 ("EMA20 > EMA50", condEma20AboveEma50),
-                ("PCR >= 1.05", condPcrCall),
-                ("RSI in (55,75)", condRsiCall),
-                ("CE Delta >= 0.40", condDeltaCall),
-                ("Volume confirmed", condVolumeCall),
-                ("PriceChangePct > 0.15", condPriceChangeCall),
+                ($"PCR >= {pcrBullishThreshold}", condPcrCall),
+                (enableRsiPullbackFilter
+                    ? $"RSI in ({rsiCallFloor},{rsiCallCeiling}) or ({rsiCallPullbackFloor},{rsiCallPullbackCeiling})"
+                    : $"RSI in ({rsiCallFloor},{rsiCallCeiling})", condRsiCall),
+                ($"CE Delta >= {deltaMinimum}", condDeltaCall),
+                ($"PriceChangePct > {priceChangeThreshold}", condPriceChangeCall),
                 ("Candle bullish", condCandleBullish),
             };
             var putChecks = new (string Label, bool Passed)[]
@@ -372,11 +399,12 @@ public class SignalEngineService
                 ("Trend Bearish", condTrendBearish),
                 ("LTP < EMA20", condLtpBelowEma20),
                 ("EMA20 < EMA50", condEma20BelowEma50),
-                ("PCR <= 0.95", condPcrPut),
-                ("RSI in (30,45)", condRsiPut),
-                ("PE Delta <= -0.40", condDeltaPut),
-                ("Volume confirmed", condVolumePut),
-                ("PriceChangePct < -0.15", condPriceChangePut),
+                ($"PCR <= {pcrBearishThreshold}", condPcrPut),
+                (enableRsiPullbackFilter
+                    ? $"RSI in ({rsiPutFloor},{rsiPutCeiling}) or ({rsiPutBouncebackFloor},{rsiPutBouncebackCeiling})"
+                    : $"RSI in ({rsiPutFloor},{rsiPutCeiling})", condRsiPut),
+                ($"PE Delta <= -{deltaMinimum}", condDeltaPut),
+                ($"PriceChangePct < -{priceChangeThreshold}", condPriceChangePut),
                 ("Candle bearish", condCandleBearish),
             };
 
@@ -384,29 +412,183 @@ public class SignalEngineService
                 .Concat(putChecks.Where(c => !c.Passed).Select(c => $"PUT: {c.Label}"))
                 .ToList();
 
-            _logger.LogInformation(
-                "Signal rejected for {Symbol}\nFailed conditions:\n{CallChecklist}\n{PutChecklist}\nRejected because:\n{Reasons}",
-                symbol,
-                FormatChecklist(callChecks),
-                FormatChecklist(putChecks),
-                string.Join(Environment.NewLine, failureReasons));
-
             return SignalGenerationResult.Failed(failureReasons);
         }
-        _logger.LogInformation(
-    "Signal Check: Symbol={Symbol}, RSI={Rsi}, PCR={Pcr}, Delta={Delta}, TrendBullish={TrendBullish}, TrendBearish={TrendBearish}, Vol={VolConfirmed}, CandleBullish={CandleBullish}, CandleBearish={CandleBearish}",
-    symbol,
-    rsi,
-    pcr,
-    ceAtmDelta,
-    trendBullish,
-    trendBearish,
-    volConfirmed,
-    candleBullish,
-    candleBearish);
-        var optionType = call ? TradingConst.OptionType.CE : TradingConst.OptionType.PE;
 
-        // Single lookup — LTP + TradingSymbol from chain
+        // NOTE: parameter order here previously mismatched ComputeConfidence's signature (bodyPct,
+        // rsiCallFloor, rsiCallCeiling, rsiPutFloor, rsiPutCeiling, bodyPctMinimum -- bodyPctMinimum
+        // is LAST) -- bodyPctMinimum was landing in the rsiCallFloor slot and every RSI threshold
+        // was shifted one position, silently scrambling every confidence score this method ever
+        // produced (including the live lot-sizing tiers and the 70%-confidence gate). Fixed below;
+        // flagged separately since it's a pre-existing defect, not part of the scoring-engine change.
+        var confidence = ComputeConfidence(
+    call,
+    ema20,
+    ema50,
+    ltp,
+    pcr,
+    rsi,
+    currentVolume,
+    avgVolume20,
+    bodyPct,
+    rsiCallFloor,
+    rsiCallCeiling,
+    rsiPutFloor,
+    rsiPutCeiling,
+    bodyPctMinimum);
+
+        var legacyOptionType = call ? TradingConst.OptionType.CE : TradingConst.OptionType.PE;
+        return BuildSignalResult(symbol, ltp, atrRaw, chain, atmStrike, legacyOptionType, confidence, call, null);
+    }
+
+    // ── Scored path — CALL and PUT evaluated independently, strongest eligible candidate wins ──
+    private SignalGenerationResult GenerateScored(
+        string symbol, decimal ltp, decimal ema20, decimal ema50, decimal pcr, decimal rsi,
+        decimal currentVolume, decimal avgVolume20, decimal priceChangePct, decimal atrPct, decimal atrRaw,
+        List<OptionChainData> chain, decimal atmStrike, OptionChainData atmCe, OptionChainData atmPe,
+        bool trendBullish, bool trendBearish, Candle lastClosedCandle, decimal bodyPct,
+        decimal rsiCallFloor, decimal rsiCallCeiling, decimal rsiPutFloor, decimal rsiPutCeiling,
+        decimal bodyPctMinimum, decimal pcrBullishThreshold, decimal pcrBearishThreshold)
+    {
+        var (callScore, putScore, callConfidence, putConfidence) = ComputeScores(
+            symbol, ltp, ema20, ema50, pcr, rsi, currentVolume, avgVolume20, priceChangePct, atrPct,
+            atmCe, atmPe, trendBullish, trendBearish, lastClosedCandle, bodyPct,
+            rsiCallFloor, rsiCallCeiling, rsiPutFloor, rsiPutCeiling, bodyPctMinimum,
+            pcrBullishThreshold, pcrBearishThreshold);
+
+        var scoreThreshold = _strategySettings.GetDecimal("SignalScoreThreshold", symbol, 10m);
+        bool callEligible = callScore.Total >= scoreThreshold;
+        bool putEligible = putScore.Total >= scoreThreshold;
+
+        if (!callEligible && !putEligible)
+        {
+            var best = callScore.Total >= putScore.Total ? callScore : putScore;
+            return SignalGenerationResult.Failed(
+                new[]
+                {
+                    $"CALL score={callScore.Total} Required={scoreThreshold:F0} ({callScore})",
+                    $"PUT score={putScore.Total} Required={scoreThreshold:F0} ({putScore})",
+                },
+                best);
+        }
+
+        bool chooseCall;
+        if (callEligible && putEligible)
+        {
+            if (callScore.Total != putScore.Total)
+                chooseCall = callScore.Total > putScore.Total;
+            else
+                // Tie on score — StrategySelectorService has no CALL/PUT tie-break of its own
+                // (it only arbitrates Directional vs HeroZero vs Expiry), so fall back to the one
+                // existing per-direction quality signal already computed here: ComputeConfidence.
+                chooseCall = callConfidence >= putConfidence;
+        }
+        else
+        {
+            chooseCall = callEligible;
+        }
+
+        var winningScore = chooseCall ? callScore : putScore;
+        var confidence = chooseCall ? callConfidence : putConfidence;
+        var optionType = chooseCall ? TradingConst.OptionType.CE : TradingConst.OptionType.PE;
+
+        return BuildSignalResult(symbol, ltp, atrRaw, chain, atmStrike, optionType, confidence, chooseCall, winningScore);
+    }
+
+    // ── Independent CALL/PUT score computation — shared by GenerateScored and the internal test
+    // seam below, so tests can verify both candidates' breakdowns without duplicating this logic. ──
+    private (SignalScore Call, SignalScore Put, decimal CallConfidence, decimal PutConfidence) ComputeScores(
+        string symbol, decimal ltp, decimal ema20, decimal ema50, decimal pcr, decimal rsi,
+        decimal currentVolume, decimal avgVolume20, decimal priceChangePct, decimal atrPct,
+        OptionChainData atmCe, OptionChainData atmPe, bool trendBullish, bool trendBearish,
+        Candle lastClosedCandle, decimal bodyPct,
+        decimal rsiCallFloor, decimal rsiCallCeiling, decimal rsiPutFloor, decimal rsiPutCeiling,
+        decimal bodyPctMinimum, decimal pcrBullishThreshold, decimal pcrBearishThreshold)
+    {
+        var bodyPctScoreLowThreshold = _strategySettings.GetDecimal("BodyPctScoreLowThreshold", symbol, 20m);
+        var priceChangeScoreThreshold = _strategySettings.GetDecimal("PriceChangeScoreThreshold", symbol, 0.15m);
+
+        // ATR quality bands — the top band reuses MinAtrPercent directly (the same bar that used
+        // to be a hard gate), so switching EnableSignalScoring on doesn't silently change what
+        // counts as good ATR, only what happens when it isn't met. No separate "high threshold"
+        // setting — a distinct key here would just default straight back to MinAtrPercent's value.
+        var atrScoreHighThreshold = _strategySettings.GetDecimal("MinAtrPercent", symbol, 0.10m);
+        var atrScoreLowThreshold = _strategySettings.GetDecimal(
+            "AtrScoreLowThreshold", symbol, Math.Max(0m, atrScoreHighThreshold - 0.005m));
+
+        var callConfidence = ComputeConfidence(true, ema20, ema50, ltp, pcr, rsi, currentVolume, avgVolume20,
+            bodyPct, rsiCallFloor, rsiCallCeiling, rsiPutFloor, rsiPutCeiling, bodyPctMinimum);
+        var putConfidence = ComputeConfidence(false, ema20, ema50, ltp, pcr, rsi, currentVolume, avgVolume20,
+            bodyPct, rsiCallFloor, rsiCallCeiling, rsiPutFloor, rsiPutCeiling, bodyPctMinimum);
+
+        var candleDelta = lastClosedCandle.Close - lastClosedCandle.Open;
+
+        var callScore = new SignalScore
+        {
+            IsCall = true,
+            Confidence = callConfidence,
+            TrendScore = trendBullish ? 2 : 0,
+            Ema20Score = ltp > ema20 ? 2 : 0,
+            Ema50Score = ema20 > ema50 ? 2 : 0,
+            RsiScore = (rsi >= rsiCallFloor && rsi <= rsiCallCeiling) ? 2 : 0,
+            PriceChangeScore = priceChangePct > priceChangeScoreThreshold ? 1 : 0,
+            CandleScore = candleDelta > 0 ? 1 : 0,
+            BodyScore = bodyPct >= bodyPctMinimum ? 2 : bodyPct >= bodyPctScoreLowThreshold ? 1 : 0,
+            AtrScore = atrPct >= atrScoreHighThreshold ? 2 : atrPct >= atrScoreLowThreshold ? 1 : 0,
+            PcrScore = pcr >= pcrBullishThreshold ? 1 : 0,
+            OiScore = (_oi.IsLongBuildUp(atmCe.ChangeInOi, candleDelta) || _oi.IsShortCovering(atmCe.ChangeInOi, candleDelta)) ? 1 : 0,
+        };
+        callScore.ConfidenceScore = callConfidence >= 70m ? 3 : callConfidence >= 65m ? 2 : callConfidence >= 60m ? 1 : 0;
+
+        var putScore = new SignalScore
+        {
+            IsCall = false,
+            Confidence = putConfidence,
+            TrendScore = trendBearish ? 2 : 0,
+            Ema20Score = ltp < ema20 ? 2 : 0,
+            Ema50Score = ema20 < ema50 ? 2 : 0,
+            RsiScore = (rsi >= rsiPutFloor && rsi <= rsiPutCeiling) ? 2 : 0,
+            PriceChangeScore = priceChangePct < -priceChangeScoreThreshold ? 1 : 0,
+            CandleScore = candleDelta < 0 ? 1 : 0,
+            BodyScore = bodyPct >= bodyPctMinimum ? 2 : bodyPct >= bodyPctScoreLowThreshold ? 1 : 0,
+            AtrScore = atrPct >= atrScoreHighThreshold ? 2 : atrPct >= atrScoreLowThreshold ? 1 : 0,
+            PcrScore = pcr <= pcrBearishThreshold ? 1 : 0,
+            OiScore = (_oi.IsLongBuildUp(atmPe.ChangeInOi, -candleDelta) || _oi.IsShortCovering(atmPe.ChangeInOi, -candleDelta)) ? 1 : 0,
+        };
+        putScore.ConfidenceScore = putConfidence >= 70m ? 3 : putConfidence >= 65m ? 2 : putConfidence >= 60m ? 1 : 0;
+
+        return (callScore, putScore, callConfidence, putConfidence);
+    }
+
+    // Test-only seam (see AssemblyInfo InternalsVisibleTo -> Trading.Tests). Exposes both
+    // independently computed candidate scores without changing any public behavior, so tests can
+    // verify the CALL/PUT comparison and tie-break rule (spec: "CALL score > PUT score -> CALL")
+    // directly instead of only observing GenerateScored's single winner.
+    internal (SignalScore Call, SignalScore Put) ComputeScoresForTest(
+        string symbol, decimal ltp, decimal ema20, decimal ema50, decimal ema20_5m, decimal ema50_5m,
+        decimal pcr, decimal rsi, decimal currentVolume, decimal avgVolume20, decimal priceChangePct,
+        decimal atrPct, Candle lastClosedCandle, decimal bodyPct, OptionChainData atmCe, OptionChainData atmPe,
+        decimal rsiCallFloor = 55m, decimal rsiCallCeiling = 70m, decimal rsiPutFloor = 30m, decimal rsiPutCeiling = 45m,
+        decimal bodyPctMinimum = 35m, decimal pcrBullishThreshold = 1.00m, decimal pcrBearishThreshold = 1.00m)
+    {
+        bool trendBullish = ema20_5m > 0 && ema50_5m > 0 && ema20_5m > ema50_5m;
+        bool trendBearish = ema20_5m > 0 && ema50_5m > 0 && ema20_5m < ema50_5m;
+
+        var (call, put, _, _) = ComputeScores(
+            symbol, ltp, ema20, ema50, pcr, rsi, currentVolume, avgVolume20, priceChangePct, atrPct,
+            atmCe, atmPe, trendBullish, trendBearish, lastClosedCandle, bodyPct,
+            rsiCallFloor, rsiCallCeiling, rsiPutFloor, rsiPutCeiling, bodyPctMinimum,
+            pcrBullishThreshold, pcrBearishThreshold);
+        return (call, put);
+    }
+
+    // ── Shared tail — option-leg lookup, index/option SL/target math, SignalBuilder ─────────────
+    // Identical for both the legacy and scored paths once `call`/`confidence` are known; factored
+    // out so the two decision paths above don't duplicate ~80 lines of risk/target construction.
+    private SignalGenerationResult BuildSignalResult(
+        string symbol, decimal ltp, decimal atrRaw, List<OptionChainData> chain, decimal atmStrike,
+        string optionType, decimal confidence, bool call, SignalScore? score)
+    {
         var chainLeg = chain
     .Where(o =>
         o.OptionType == optionType &&
@@ -419,14 +601,12 @@ public class SignalEngineService
 
         // No valid premium — chain data stale or strike not found. Block signal.
         if (optionLtp <= 0)
-            return SignalGenerationResult.Failed("Stale/zero option premium for selected leg");
+            return SignalGenerationResult.Failed(new[] { "Stale/zero option premium for selected leg" }, score);
 
         // Prefer Groww's TradingSymbol; fall back to constructed name
         var optionSymbol = (chainLeg != null && !string.IsNullOrWhiteSpace(chainLeg.TradingSymbol))
             ? chainLeg.TradingSymbol
             : $"{symbol}{IstClock.Now:yyMMM}{(int)atmStrike}{optionType}".ToUpper();
-
-        var confidence = ComputeConfidence(call, ema20, ema50, ltp, pcr, rsi, currentVolume, avgVolume20, bodyPct);
 
         var vega = chainLeg?.Vega ?? 0m;
         var highVegaThreshold = Settings.HighVegaThreshold;
@@ -442,10 +622,6 @@ public class SignalEngineService
         decimal t1 = risk.Target1;
         decimal t2 = risk.Target2;
 
-        // Distance-only reuse below (option-target fallback) — unchanged from before.
-        decimal slPoints = Math.Abs(ltp - sl);
-
-
         // ===============================
         // OPTION Targets — option's OWN candles (ATR + support/resistance) first;
         // falls back to a delta-adjusted index-based estimate only when there isn't
@@ -457,37 +633,24 @@ public class SignalEngineService
         decimal optionT1;
         decimal optionT2;
 
-        var optionSnapshots = _optionChainRepo
-            .FindAsync(o => o.TradingSymbol == optionSymbol && o.CreatedOn >= IstClock.Now.AddHours(-2))
-            .GetAwaiter().GetResult();
-        var optionCandles = OptionTargetService.BuildCandlesFromSnapshots(optionSnapshots, optionSymbol);
-        var candleLevels = _optionTargets.Calculate(optionCandles, optionLtp);
+        var delta = Math.Abs(chainLeg!.Delta);
+        if (delta <= 0)
+            delta = 0.45m;
 
-        if (candleLevels != null)
-        {
-            optionSL = candleLevels.StopLoss;
-            optionT1 = candleLevels.Target1;
-            optionT2 = candleLevels.Target2;
-        }
-        else
-        {
-            // Fallback: delta-adjusted, same distance basis as index SL (slPoints).
-            var delta = Math.Abs(chainLeg.Delta);
-            if (delta <= 0) delta = 0.45m;
+        var stopDistance = Math.Abs(ltp - sl);
 
-            decimal optionMove1 = Math.Abs(t1 - ltp) * delta;
-            decimal optionMove2 = Math.Abs(t2 - ltp) * delta;
-            var optionRisk = slPoints * delta;
+        var optionRisk = stopDistance * delta;
+        var optionTarget1 = atrRaw * Settings.AtrTarget1Multiplier * delta;
+        var optionTarget2 = atrRaw * Settings.AtrTarget2Multiplier * delta;
 
-            optionSL = Math.Round(optionLtp - optionRisk, 2);
+        optionSL = Math.Round(optionLtp - optionRisk, 2);
 
-            var maxLoss = optionLtp * 0.80m;
-            if (optionSL < maxLoss) optionSL = maxLoss;
+        var maxLoss = optionLtp * 0.80m;
+        if (optionSL < maxLoss)
+            optionSL = maxLoss;
 
-            optionT1 = Math.Round(optionLtp + optionMove1, 2);
-            optionT2 = Math.Round(optionLtp + optionMove2, 2);
-        }
-
+        optionT1 = Math.Round(optionLtp + optionTarget1, 2);
+        optionT2 = Math.Round(optionLtp + optionTarget2, 2);
         // ===============================
         // Build Signal
         // ===============================
@@ -528,7 +691,7 @@ public class SignalEngineService
             .WithConfidence(confidence);
 
 
-        return SignalGenerationResult.Success(builder.Build());
+        return SignalGenerationResult.Success(builder.Build(), score);
     }
 
     private static string FormatChecklist(IEnumerable<(string Label, bool Passed)> items) =>

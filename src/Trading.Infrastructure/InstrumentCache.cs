@@ -63,10 +63,5 @@ public class InstrumentCache : IInstrumentCache
             .Where(i => i.IsActive)
             .AsNoTracking()
             .ToListAsync(ct);
-
-        _logger.LogInformation(
-            "InstrumentCache loaded {Count} active instrument(s): {Symbols}",
-            _cache.Count,
-            string.Join(", ", _cache.Select(i => i.Symbol)));
     }
 }

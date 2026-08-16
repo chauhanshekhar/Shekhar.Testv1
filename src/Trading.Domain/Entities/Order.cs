@@ -11,6 +11,7 @@ public class Order
     public string Exchange { get; set; } = "";
     public string Side { get; set; } = "";   // BUY / SELL
     public string OrderType { get; set; } = "";   // MARKET / LIMIT / SL / SL-M
+    public string OrderPurpose { get; set; } = "";   // ENTRY / STOPLOSS / TARGET / PARTIAL_EXIT / FORCE_EXIT / EXIT — see Trading.Domain.OrderPurpose
     public string ProductType { get; set; } = "";   // CNC / MIS / NRML
     public string Status { get; set; } = "";   // see Trading.Domain.OrderStatus for our lifecycle states; also stores Groww-reported states (NEW/ACKED/TRIGGER_PENDING/APPROVED/EXECUTED/COMPLETED/REJECTED/CANCELLED)
     public string StatusMessage { get; set; } = "";   // rejection reason etc.

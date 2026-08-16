@@ -31,7 +31,6 @@ public class HolidayCalendarWorker : BackgroundService
         {
             // Sleep until next IST midnight, then reload
             var delay = NextMidnightDelay();
-            _logger.LogDebug("HolidayCalendarWorker: next refresh in {Minutes:N0} min", delay.TotalMinutes);
             await Task.Delay(delay, stoppingToken);
             await LoadHolidaysAsync();
         }
@@ -46,9 +45,6 @@ public class HolidayCalendarWorker : BackgroundService
 
             var holidays = await repo.FindAsync(h => h.IsActive);
             HolidayCache.Set(holidays.Select(h => h.HolidayDate));
-
-            _logger.LogInformation(
-                "HolidayCalendarWorker: loaded {Count} exchange holidays into cache", holidays.Count);
         }
         catch (Exception ex)
         {

@@ -3,6 +3,7 @@ using Trading.Application.Interfaces;
 using Trading.Application.Models;
 using Trading.Domain;
 using Trading.Domain.Entities;
+using Trading.Infrastructure.Brokers.Groww;
 using Trading.Infrastructure.Repositories;
 using Trading.SignalEngine.Services;
 
@@ -29,7 +30,12 @@ public class BrokerOrderSyncWorker : BackgroundService
     private readonly ILogger<BrokerOrderSyncWorker> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ITradingAlertService _alerts;
-    private static readonly TimeSpan Interval      = TimeSpan.FromSeconds(30);
+    private readonly StopLossOrderCoordinator _stopLossCoordinator;
+
+    // 5s during market hours — a resting SL_M fill must be detected fast (this is the whole
+    // point of moving the stop loss to the broker); 30s outside hours since nothing is moving.
+    private static readonly TimeSpan MarketOpenInterval   = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan MarketClosedInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ReconcileWindow = TimeSpan.FromHours(8);
     private const int MaxSyncAttempts = 10;
 
@@ -40,22 +46,23 @@ public class BrokerOrderSyncWorker : BackgroundService
     public BrokerOrderSyncWorker(
         ILogger<BrokerOrderSyncWorker> logger,
         IServiceScopeFactory scopeFactory,
-        ITradingAlertService alerts)
+        ITradingAlertService alerts,
+        StopLossOrderCoordinator stopLossCoordinator)
     {
         _logger       = logger;
         _scopeFactory = scopeFactory;
         _alerts       = alerts;
+        _stopLossCoordinator = stopLossCoordinator;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("BrokerOrderSyncWorker started");
-
         while (!stoppingToken.IsCancellationRequested)
         {
+            var marketOpen = MarketHours.IsOpen();
             try
             {
-                if (MarketHours.IsOpen())
+                if (marketOpen)
                     await SyncAsync();
             }
             catch (Exception ex)
@@ -63,7 +70,7 @@ public class BrokerOrderSyncWorker : BackgroundService
                 _logger.LogError(ex, "BrokerOrderSyncWorker error");
             }
 
-            await Task.Delay(Interval, stoppingToken);
+            await Task.Delay(marketOpen ? MarketOpenInterval : MarketClosedInterval, stoppingToken);
         }
     }
 
@@ -86,15 +93,13 @@ public class BrokerOrderSyncWorker : BackgroundService
 
         if (openOrders.Count == 0) return;
 
-        _logger.LogDebug("BrokerOrderSync: checking {Count} unresolved orders", openOrders.Count);
-
         bool anyChange = false;
 
         foreach (var order in openOrders)
         {
             if (string.IsNullOrEmpty(order.BrokerOrderId))
             {
-                anyChange |= await ResolveByReferenceAsync(order, orderService, signalRepo, positionRepo);
+                anyChange |= await ResolveByReferenceAsync(order, orderService, signalRepo, positionRepo, orderRepo, uow, tradeCompletion);
                 continue;
             }
 
@@ -103,19 +108,14 @@ public class BrokerOrderSyncWorker : BackgroundService
             {
                 brokerStatus = await orderService.GetOrderStatusAsync(order.BrokerOrderId);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                _logger.LogWarning(ex, "BrokerOrderSync: could not fetch status for order {Id} ({BrokerId})",
-                    order.Id, order.BrokerOrderId);
                 continue;
             }
 
             if (brokerStatus is null)
             {
                 // Order not found on broker — may have been cancelled on the dashboard
-                _logger.LogWarning(
-                    "BrokerOrderSync: order {Id} ({BrokerId}) not found on broker — possible external cancel",
-                    order.Id, order.BrokerOrderId);
                 await _alerts.SendCriticalAsync(
                     $"BrokerOrderSync: order #{order.Id} ({order.Symbol} {order.Side}) " +
                     $"not found on broker. May have been cancelled externally. BrokerOrderId={order.BrokerOrderId}");
@@ -134,12 +134,8 @@ public class BrokerOrderSyncWorker : BackgroundService
             order.UpdatedAt     = IstClock.Now;
             anyChange = true;
 
-            _logger.LogInformation(
-                "BrokerOrderSync: order {Id} {Symbol} {Side} → {Status} (filled={Filled}, avg={Avg:F2})",
-                order.Id, order.Symbol, order.Side, normalized, brokerStatus.FilledQty, brokerStatus.AvgPrice);
-
             // Propagate terminal status to linked Signal
-            await UpdateSignalStatusAsync(signalRepo, positionRepo, order, normalized, tradeCompletion);
+            await UpdateSignalStatusAsync(signalRepo, positionRepo, order, normalized, orderRepo, orderService, uow, tradeCompletion);
         }
 
         if (anyChange)
@@ -155,7 +151,10 @@ public class BrokerOrderSyncWorker : BackgroundService
         Order order,
         IOrderService orderService,
         IRepository<Signal> signalRepo,
-        IRepository<Position> positionRepo)
+        IRepository<Position> positionRepo,
+        IRepository<Order> orderRepo,
+        IUnitOfWork uow,
+        TradeCompletionService tradeCompletion)
     {
         var signal = order.SignalId.HasValue
             ? (await signalRepo.FindAsync(s => s.Id == order.SignalId.Value)).FirstOrDefault()
@@ -166,10 +165,8 @@ public class BrokerOrderSyncWorker : BackgroundService
         {
             detail = await orderService.GetOrderByReferenceAsync(order.OrderReferenceId);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            _logger.LogWarning(ex, "BrokerOrderSync: reference lookup failed for order {Id} (ref={Ref})",
-                order.Id, order.OrderReferenceId);
             detail = null;
         }
 
@@ -205,19 +202,55 @@ public class BrokerOrderSyncWorker : BackgroundService
         order.RawPostback = JsonSerializer.Serialize(detail);
         order.UpdatedAt = IstClock.Now;
 
-        _logger.LogInformation(
-            "BrokerOrderSync: resolved order {Id} via OrderReferenceId={Ref} → {Status}",
-            order.Id, order.OrderReferenceId, normalized);
-
         if (signal != null)
         {
+            // Broker-managed SL_M rows are resting protective orders, not "the" entry/exit of
+            // the signal — mirror UpdateSignalStatusAsync's guard so a fill/rejection/cancel
+            // discovered via this reference-lookup path (BrokerOrderId was unresolved when this
+            // order was placed) can't clobber signal.BrokerOrderId/BrokerOrderStatus or misfire
+            // the generic ENTRY/EXIT handling below. Without this, an SL_M rejection here used
+            // to flip an otherwise-healthy ACTIVE signal straight to ORDER_REJECTED, pulling a
+            // live filled position out of ExitWorker's monitoring entirely.
+            if (order.OrderPurpose == Trading.Domain.OrderPurpose.StopLoss)
+            {
+                switch (normalized)
+                {
+                    case "COMPLETE":
+                        await tradeCompletion.CompleteExitAsync(signal, order, TradingConst.ExitReason.OptionSlHit);
+                        signal.StopLossOrderId = "";
+                        signal.StopLossStatus = "";
+                        break;
+                    case "REJECTED":
+                        signal.StopLossStatus = "FAILED";
+                        break;
+                    case "CANCELLED":
+                        signal.StopLossStatus = "CANCELLED";
+                        break;
+                }
+                return true;
+            }
+
             signal.BrokerOrderId = detail.GrowwOrderId;
             signal.BrokerOrderStatus = normalized;
 
-            if (normalized == "COMPLETE" && order.Side.Equals("BUY", StringComparison.OrdinalIgnoreCase))
-                await ActivateSignalAsync(signal, order, positionRepo);
+            if (normalized == "COMPLETE")
+            {
+                if (order.Side.Equals("BUY", StringComparison.OrdinalIgnoreCase))
+                {
+                    await ActivateSignalAsync(signal, order, positionRepo, orderRepo, signalRepo, orderService, uow);
+                }
+                else if (order.Side.Equals("SELL", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (signal.Status == SignalStatus.ExitPending)
+                        await tradeCompletion.CompleteExitAsync(signal, order, signal.ExitReason ?? "UNKNOWN");
+                    else if (signal.Status == SignalStatus.PartialExitPending)
+                        await tradeCompletion.CompletePartialExitAsync(signal, order);
+                }
+            }
             else if (normalized is "REJECTED" or "CANCELLED")
+            {
                 signal.Status = SignalStatus.OrderRejected;
+            }
         }
 
         return true;
@@ -228,6 +261,9 @@ public class BrokerOrderSyncWorker : BackgroundService
         IRepository<Position> positionRepo,
         Order order,
         string normalizedStatus,
+        IRepository<Order> orderRepo,
+        IOrderService orders,
+        IUnitOfWork uow,
         TradeCompletionService tradeCompletion)
     {
         Signal? signal = null;
@@ -253,6 +289,32 @@ public class BrokerOrderSyncWorker : BackgroundService
             return;
 
 
+        // Broker-managed SL_M rows are resting protective orders, not "the" entry/exit of the
+        // signal — they must never drive signal.Status the way a normal BUY/SELL order does.
+        // Handled separately so a rejected/cancelled SL_M placement can never misfire the
+        // generic ENTRY/EXIT switch below and flip an otherwise-healthy ACTIVE signal to
+        // ORDER_REJECTED. Identified by OrderPurpose, not OrderType — OrderType only says HOW
+        // the order executes (SL_M/MARKET/LIMIT); OrderPurpose says WHY it exists, which is what
+        // this branch actually needs (and stays correct if a future order type also uses SL_M).
+        if (order.OrderPurpose == Trading.Domain.OrderPurpose.StopLoss)
+        {
+            switch (normalizedStatus)
+            {
+                case "COMPLETE":
+                    await tradeCompletion.CompleteExitAsync(signal, order, TradingConst.ExitReason.OptionSlHit);
+                    signal.StopLossOrderId = "";
+                    signal.StopLossStatus = "";
+                    break;
+                case "REJECTED":
+                    signal.StopLossStatus = "FAILED";
+                    break;
+                case "CANCELLED":
+                    signal.StopLossStatus = "CANCELLED";
+                    break;
+            }
+            return;
+        }
+
         switch (normalizedStatus)
         {
             case "COMPLETE":
@@ -268,7 +330,11 @@ public class BrokerOrderSyncWorker : BackgroundService
                     await ActivateSignalAsync(
                         signal,
                         order,
-                        positionRepo);
+                        positionRepo,
+                        orderRepo,
+                        signalRepo,
+                        orders,
+                        uow);
                 }
 
 
@@ -326,8 +392,21 @@ public class BrokerOrderSyncWorker : BackgroundService
     /// EntryOrderId so repeated reconciliation cycles (or both lookup paths noticing the
     /// same COMPLETE fill) never create a duplicate.
     /// </summary>
-    private async Task ActivateSignalAsync(Signal signal, Order order, IRepository<Position> positionRepo)
+    private async Task ActivateSignalAsync(
+        Signal signal,
+        Order order,
+        IRepository<Position> positionRepo,
+        IRepository<Order> orderRepo,
+        IRepository<Signal> signalRepo,
+        IOrderService orders,
+        IUnitOfWork uow)
     {
+        // A BUY-fill confirmation arriving after the signal has already progressed past entry
+        // (e.g. both legs were stuck PENDING and resolve in the same reconcile pass) must not
+        // regress it back to ACTIVE — that would reopen an already-exited position for ExitWorker.
+        if (signal.Status != SignalStatus.Pending && signal.Status != SignalStatus.OrderPlaced)
+            return;
+
         signal.Status = SignalStatus.Active;
 
         var existing = await positionRepo.FindAsync(p => p.EntryOrderId == order.Id && p.PositionSource == "STRATEGY");
@@ -335,6 +414,27 @@ public class BrokerOrderSyncWorker : BackgroundService
 
         var filledQty = order.FilledQty > 0 ? order.FilledQty : order.Quantity;
         var avgPrice  = order.AvgPrice > 0 ? order.AvgPrice : order.Price;
+
+        // Re-anchor OptionSL/OptionT1/OptionT2 to the actual fill price. SignalBuilder computes
+        // these against OptionLtp quoted at signal-creation time, before this BUY order existed —
+        // if the LIMIT order fills away from that quote (routine for options), the resting SL_M
+        // trigger stays pinned to the stale quote, silently changing the real risk-to-stop from
+        // what the strategy intended (and TradeCompletionService's P&L, which reads OptionLtp as
+        // the entry price, would misreport against the quote instead of what was actually paid).
+        // Preserve the same risk/reward RATIO computed at signal-creation — works uniformly for
+        // both ATR-points-derived stops (Directional) and flat-percentage stops (HeroZero) — just
+        // recentre it on what was actually paid.
+        if (avgPrice > 0 && signal.OptionLtp > 0 && avgPrice != signal.OptionLtp)
+        {
+            var slRatio = signal.OptionSL / signal.OptionLtp;
+            var t1Ratio = signal.OptionT1 / signal.OptionLtp;
+            var t2Ratio = signal.OptionT2 / signal.OptionLtp;
+
+            signal.OptionSL  = Math.Round(avgPrice * slRatio, 2);
+            signal.OptionT1  = Math.Round(avgPrice * t1Ratio, 2);
+            signal.OptionT2  = Math.Round(avgPrice * t2Ratio, 2);
+            signal.OptionLtp = avgPrice;
+        }
 
         await positionRepo.AddAsync(new Position
         {
@@ -350,5 +450,38 @@ public class BrokerOrderSyncWorker : BackgroundService
             OpenedAt       = IstClock.Now,
             UpdatedOn      = IstClock.Now,
         });
+
+        await PlaceInitialStopLossAsync(signal, orderRepo, signalRepo, orders, uow);
+    }
+
+    /// <summary>
+    /// Places the broker-managed SL_M stop loss immediately after a SINGLE/HERO_ZERO position
+    /// activates — Groww's matching engine, not ExitWorker's 1s poll, now owns the stop-loss
+    /// trigger. Spreads (BULL_SPREAD/BEAR_SPREAD) are skipped — their OptionSL is a net two-leg
+    /// premium and can't be a single broker order (see TradingConst.IsSingleLegStrategy).
+    /// Delegates the actual placement to StopLossOrderCoordinator (shared with ExitWorker's
+    /// trailing-replace/self-heal and BrokerPositionSyncWorker's restart recovery). On failure
+    /// a critical alert is raised immediately — ExitWorker retries every cycle up to
+    /// MaxStopLossRetries and has a bounded last-resort MARKET-exit fallback, but a live
+    /// position with no resting broker stop for even a few seconds is exactly the failure mode
+    /// this whole change exists to avoid, so it must never fail silently.
+    /// </summary>
+    private async Task PlaceInitialStopLossAsync(
+        Signal signal,
+        IRepository<Order> orderRepo,
+        IRepository<Signal> signalRepo,
+        IOrderService orders,
+        IUnitOfWork uow)
+    {
+        if (orders.CurrentMode == TradingMode.Paper) return;
+        if (!TradingConst.IsSingleLegStrategy(signal.StrategyType)) return;
+        if (signal.OptionSL <= 0) return;
+
+        var placed = await _stopLossCoordinator.TryPlaceAsync(signal, signal.OptionSL, signal.Quantity, orders, orderRepo, signalRepo, uow);
+        if (!placed)
+        {
+            await _alerts.SendCriticalAsync(
+                $"Broker SL_M placement FAILED for signal #{signal.Id} ({signal.Symbol}) — position is unprotected at broker level (StopLossRetryCount={signal.StopLossRetryCount}). ExitWorker will retry up to the configured cap.");
+        }
     }
 }

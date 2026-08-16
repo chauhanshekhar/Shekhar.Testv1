@@ -58,7 +58,6 @@ public class EmaWorker : BackgroundService
         }
         catch (OperationCanceledException)
         {
-            _logger.LogInformation("EmaWorker stopped gracefully.");
         }
     }
 
@@ -85,7 +84,6 @@ public class EmaWorker : BackgroundService
 
         if (candles.Count < 51)
         {
-            _logger.LogDebug("EmaWorker {Symbol}: only {Count} closed candles available — need 51", symbol, candles.Count);
             return;
         }
 
@@ -104,7 +102,6 @@ public class EmaWorker : BackgroundService
         if (changed)
         {
             await uow.SaveChangesAsync();
-            _logger.LogDebug("EMA {Symbol}: EMA20={E20:F2} EMA50={E50:F2}", symbol, ema20, ema50);
         }
     }
 

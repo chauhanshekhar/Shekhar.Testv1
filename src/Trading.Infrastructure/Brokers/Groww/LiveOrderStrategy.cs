@@ -44,7 +44,12 @@ public class LiveOrderStrategy : IOrderStrategy
             throw new GrowwOrderRejectedException(result1.ErrorMessage ?? "Groww rejected the order");
         }
 
-        var orderId1 = result1.Data?.Payload?.GrowwOrderId ?? Guid.NewGuid().ToString("N")[..20];
+        if (result1.Data?.IsSuccess != true)
+            throw new GrowwOrderRejectedException(result1.Data?.ErrorMessage ?? "Groww rejected the order");
+
+        var orderId1 = result1.Data?.Payload?.GrowwOrderId;
+        if (string.IsNullOrEmpty(orderId1))
+            throw new GrowwOrderAmbiguousException("Groww returned SUCCESS with no order id");
 
         // Leg 2 for spreads (short OTM)
         if (signal.StrategyType != "SINGLE" && !string.IsNullOrEmpty(signal.Leg2Symbol))
@@ -62,7 +67,7 @@ public class LiveOrderStrategy : IOrderStrategy
         return orderId1;
     }
 
-    public async Task<string> ClosePositionAsync(Signal signal, string reason, int? lotsToClose = null)
+    public async Task<string> ClosePositionAsync(Signal signal, string reason, int? lotsToClose = null, string? orderReferenceId = null)
     {
         // Partial close passes an explicit lot count. Full close uses remaining open lots.
         var closeLots = lotsToClose ?? signal.RemainingQty;
@@ -72,11 +77,12 @@ public class LiveOrderStrategy : IOrderStrategy
         var closeContracts = closeLots * GetLotSize(signal.Symbol);
         var signalId = signal.Id.ToString();
 
-        var req1 = new PlaceOrderRequestBuilder().FromSignalExit(signal, closeContracts).Build();
+        var req1 = new PlaceOrderRequestBuilder().FromSignalExit(signal, closeContracts, orderReferenceId).Build();
         var result1 = await _growwHttp.PostAsync<GrowwResponse<PlaceOrderResponse>>(
-            GrowwEndpoint.OrderCreate, req1, signalId);
-        if (!result1.IsSuccess) return "CLOSE_FAILED";
-        var orderId1 = result1.Data?.Payload?.GrowwOrderId ?? Guid.NewGuid().ToString("N")[..20];
+            GrowwEndpoint.OrderCreate, req1, signalId, orderReferenceId);
+        if (!result1.IsSuccess || result1.Data?.IsSuccess != true) return "CLOSE_FAILED";
+        var orderId1 = result1.Data?.Payload?.GrowwOrderId;
+        if (string.IsNullOrEmpty(orderId1)) return "CLOSE_FAILED";
 
         if (signal.StrategyType != "SINGLE"
            && !string.IsNullOrEmpty(signal.Leg2Symbol)
@@ -95,11 +101,35 @@ public class LiveOrderStrategy : IOrderStrategy
         return orderId1;
     }
 
+    public async Task<string> PlaceStopLossOrderAsync(Signal signal, decimal triggerPrice, int lots, string orderReferenceId)
+    {
+        var contracts = lots * GetLotSize(signal.Symbol);
+        var signalId = signal.Id.ToString();
+
+        var req = new PlaceOrderRequestBuilder().FromSignalStopLoss(signal, contracts, triggerPrice, orderReferenceId).Build();
+        var result = await _growwHttp.PostAsync<GrowwResponse<PlaceOrderResponse>>(
+            GrowwEndpoint.OrderCreate, req, signalId, orderReferenceId);
+
+        if (!result.IsSuccess || result.Data?.IsSuccess != true) return "SL_FAILED";
+
+        var orderId = result.Data?.Payload?.GrowwOrderId;
+        return string.IsNullOrEmpty(orderId) ? "SL_FAILED" : orderId;
+    }
+
     public async Task<bool> CancelOrderAsync(string orderId)
     {
         var request = new CancelOrderRequest { GrowwOrderId = orderId, Segment = GrowwSegment.Fno };
         var result = await _growwHttp.PostAsync<GrowwResponse<object>>(GrowwEndpoint.OrderCancel, request);
-        return result.IsSuccess;
+        if (result.IsSuccess) return true;
+
+        // Some brokers report "already cancelled" as a failure response rather than a no-op
+        // success — treat it as a successful (idempotent) cancel, since the order is provably
+        // no longer live. Deliberately does NOT match "already complete/executed" — that case
+        // means the order filled, not that it's safely gone, and callers (StopLossOrderCoordinator)
+        // need that distinction to avoid placing a duplicate SELL on top of a filled order.
+        var errorText = $"{result.ErrorMessage} {result.Data?.ErrorMessage} {result.Data?.Error?.Message}";
+        return errorText.Contains("ALREADY", StringComparison.OrdinalIgnoreCase)
+            && errorText.Contains("CANCEL", StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task<bool> ModifyOrderAsync(string orderId, decimal price)
@@ -134,13 +164,13 @@ public class LiveOrderStrategy : IOrderStrategy
 
     private static string NormalizeGrowwStatus(string raw) => raw.ToUpperInvariant() switch
     {
-        "COMPLETE"        => "COMPLETE",
-        "REJECTED"        => "REJECTED",
-        "CANCELLED"       => "CANCELLED",
-        "OPEN"            => "OPEN",
-        "PLACED"          => "PENDING",
-        "TRIGGER PENDING" => "PENDING",
-        _                 => "PENDING",
+        "COMPLETE" or "COMPLETED" or "EXECUTED"                    => "COMPLETE",
+        "REJECTED"                                                 => "REJECTED",
+        "CANCELLED"                                                => "CANCELLED",
+        "OPEN"                                                     => "OPEN",
+        "PLACED" or "NEW" or "ACKED" or "APPROVED"
+            or "TRIGGER_PENDING" or "TRIGGER PENDING"               => "PENDING",
+        _                                                          => "PENDING",
     };
 
     // ── Extended methods (detail, trades) ────────────────────────────────────

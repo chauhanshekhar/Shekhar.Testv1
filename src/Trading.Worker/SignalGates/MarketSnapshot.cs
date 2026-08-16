@@ -37,6 +37,9 @@ public record MarketSnapshot(
     /// Never read by trading logic.
     /// </summary>
     public IndicatorSnapshot? Audit { get; init; }
+
+    /// <summary>Last closed 1-minute candle — entry trigger candidate (see UseOneMinuteEntryCandle).</summary>
+    public Candle? LastClosed1mCandle { get; init; }
 }
 
 public static class MarketSnapshotBuilder
@@ -121,7 +124,12 @@ public static class MarketSnapshotBuilder
         var ema20 = ctx.Ema.GetEma(closes1m, 20);
         var ema50 = ctx.Ema.GetEma(closes1m, 50);
         var rsi = ctx.Rsi.GetRsi(closes1m);
-        var atrRaw = ctx.Atr.Calculate(indicatorCandles, 14);
+        // Use only today's candles for ATR
+        var atrSource = todayCandles.Count >= 14
+            ? todayCandles
+            : indicatorCandles.TakeLast(14).ToList(); // fallback near market open
+
+        var atrRaw = ctx.Atr.Calculate(atrSource, 14);
 
         var atrPct = ltp > 0
             ? atrRaw / ltp * 100m
@@ -259,7 +267,8 @@ public static class MarketSnapshotBuilder
             LastOptionChainAge: lastOptionChainAge,
             LastClosed5mCandle: todayCandles5m.Count > 0 ? todayCandles5m[^1] : null)
         {
-            Audit = audit
+            Audit = audit,
+            LastClosed1mCandle = indicatorCandles.Count > 0 ? indicatorCandles[^1] : null
         };
     }
     //public static async Task<MarketSnapshot?> BuildAsync(SignalContext ctx)

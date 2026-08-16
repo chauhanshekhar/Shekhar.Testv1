@@ -41,7 +41,8 @@ public class OrderRouter : IOrderService
     };
 
     public Task<string> PlaceOrderAsync(Signal signal) => Strategy.PlaceOrderAsync(signal);
-    public Task<string> ClosePositionAsync(Signal signal, string reason, int? lotsToClose = null) => Strategy.ClosePositionAsync(signal, reason, lotsToClose);
+    public Task<string> ClosePositionAsync(Signal signal, string reason, int? lotsToClose = null, string? orderReferenceId = null) => Strategy.ClosePositionAsync(signal, reason, lotsToClose, orderReferenceId);
+    public Task<string> PlaceStopLossOrderAsync(Signal signal, decimal triggerPrice, int lots, string orderReferenceId) => Strategy.PlaceStopLossOrderAsync(signal, triggerPrice, lots, orderReferenceId);
     public Task<bool> CancelOrderAsync(string orderId) => Strategy.CancelOrderAsync(orderId);
     public Task<bool> ModifyOrderAsync(string orderId, decimal price) => Strategy.ModifyOrderAsync(orderId, price);
     public Task<List<string>> GetOpenOrdersAsync() => Strategy.GetOpenOrdersAsync();

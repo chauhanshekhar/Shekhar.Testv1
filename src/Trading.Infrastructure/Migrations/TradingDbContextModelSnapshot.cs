@@ -398,9 +398,33 @@ namespace Trading.Infrastructure.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
+                    b.Property<decimal?>("BlockedChangeInOi")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal?>("BlockedDelta")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal?>("BlockedOptionLtp")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("BlockedOptionSymbol")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("BlockedOptionType")
+                        .HasMaxLength(2)
+                        .HasColumnType("nvarchar(2)");
+
                     b.Property<string>("BlockedReason")
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
+
+                    b.Property<decimal?>("BlockedStrikePrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<decimal>("Confidence")
                         .HasPrecision(18, 2)
@@ -458,6 +482,46 @@ namespace Trading.Infrastructure.Migrations
                     b.Property<decimal>("Rsi")
                         .HasPrecision(18, 4)
                         .HasColumnType("decimal(18,4)");
+
+                    b.Property<int?>("ScoreAtr")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ScoreBody")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ScoreCandle")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ScoreConfidence")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ScoreDirection")
+                        .HasMaxLength(4)
+                        .HasColumnType("nvarchar(4)");
+
+                    b.Property<int?>("ScoreEma20")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ScoreEma50")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ScoreOi")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ScorePcr")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ScorePriceChange")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ScoreRsi")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ScoreTotal")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ScoreTrend")
+                        .HasColumnType("int");
 
                     b.Property<bool>("SignalGenerated")
                         .HasColumnType("bit");
@@ -671,6 +735,13 @@ namespace Trading.Infrastructure.Migrations
 
                     b.Property<int>("FilledQty")
                         .HasColumnType("int");
+
+                    b.Property<string>("OrderPurpose")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasDefaultValue("");
 
                     b.Property<string>("OrderReferenceId")
                         .IsRequired()
@@ -1008,6 +1079,9 @@ namespace Trading.Infrastructure.Migrations
                     b.Property<DateTime?>("LastOrderSyncTime")
                         .HasColumnType("datetime2");
 
+                    b.Property<DateTime?>("LastSlUpdateTime")
+                        .HasColumnType("datetime2");
+
                     b.Property<decimal>("Leg2Ltp")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
@@ -1112,6 +1186,27 @@ namespace Trading.Infrastructure.Migrations
                         .HasDefaultValue("PENDING");
 
                     b.Property<decimal>("StopLoss")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("StopLossOrderId")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)")
+                        .HasDefaultValue("");
+
+                    b.Property<int>("StopLossRetryCount")
+                        .HasColumnType("int");
+
+                    b.Property<string>("StopLossStatus")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasDefaultValue("");
+
+                    b.Property<decimal>("StopLossTriggerPrice")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
 

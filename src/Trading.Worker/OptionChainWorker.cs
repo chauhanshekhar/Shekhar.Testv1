@@ -37,7 +37,6 @@ public class OptionChainWorker : BackgroundService
 
             if (instruments.Count == 0)
             {
-                _logger.LogWarning("OptionChainWorker: no active instruments in TradingInstruments table — skipping");
                 await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
                 continue;
             }
@@ -46,9 +45,6 @@ public class OptionChainWorker : BackgroundService
             {
                 if (string.IsNullOrWhiteSpace(instrument.Expiry))
                 {
-                    _logger.LogWarning(
-                        "OptionChainWorker: {Symbol} has no Expiry set in TradingInstruments — skipping",
-                        instrument.Symbol);
                     continue;
                 }
 
@@ -83,10 +79,6 @@ public class OptionChainWorker : BackgroundService
                 CultureInfo.InvariantCulture, DateTimeStyles.None, out var expiryDate)
             || expiryDate.Date < now.Date)
         {
-            _logger.LogWarning(
-                "OptionChainWorker: {Symbol} expiry {Expiry} has passed — clearing from DB, set a new expiry",
-                dbSymbol, expiry);
-
             var stale = await instrumentRepo.FirstOrDefaultAsync(i => i.Symbol == dbSymbol);
             if (stale is not null)
             {
@@ -100,7 +92,6 @@ public class OptionChainWorker : BackgroundService
         var payload = await liveData.GetOptionChainAsync(exchange, dbSymbol, expiry);
         if (payload is null || payload.Strikes.Count == 0)
         {
-            _logger.LogWarning("Empty option chain for {Symbol} expiry {Expiry}", dbSymbol, expiry);
             return;
         }
 
@@ -180,7 +171,6 @@ public class OptionChainWorker : BackgroundService
 
         if (rows.Count == 0)
         {
-            _logger.LogWarning("No rows parsed for {Symbol} {Expiry}", dbSymbol, expiry);
             return;
         }
 
@@ -210,15 +200,9 @@ public class OptionChainWorker : BackgroundService
         await repo.StageRangeAsync(rows);
         await uow.SaveChangesAsync();
 
-        _logger.LogInformation(
-            "OptionChain saved: {Symbol} {Expiry} Spot={Ltp} PCR={Pcr:F3} Strikes={Strikes} Rows={Rows} Snapshot={SnapshotId}",
-            dbSymbol, expiry, payload.UnderlyingLtp, pcr, nearStrikes.Count, rows.Count, snapshotId);
-
         // Prune snapshots older than 2 hours
         var pruneCutoff = now.AddHours(-2);
-        var pruned = await repo.ExecuteDeleteAsync(x => x.Symbol == dbSymbol && x.CreatedOn < pruneCutoff);
-        if (pruned > 0)
-            _logger.LogInformation("Pruned {Count} stale option chain rows for {Symbol}", pruned, dbSymbol);
+        await repo.ExecuteDeleteAsync(x => x.Symbol == dbSymbol && x.CreatedOn < pruneCutoff);
     }
 
 }

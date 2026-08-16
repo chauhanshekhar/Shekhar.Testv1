@@ -1,7 +1,9 @@
 using Trading.Application.Interfaces;
+using Trading.Application.Models;
 using Trading.Domain;
 using Trading.Domain.Entities;
 using Trading.Infrastructure;
+using Trading.Infrastructure.Brokers.Groww;
 using Trading.Infrastructure.Repositories;
 using Trading.Infrastructure.Services;
 using Trading.SignalEngine.Services;
@@ -16,6 +18,7 @@ public class ExitWorker : BackgroundService
     private readonly SystemSettingsService _settingsService;
     private readonly IInstrumentCache _instruments;
     private readonly AppErrorLogger _errorLogger;
+    private readonly StopLossOrderCoordinator _stopLossCoordinator;
 
     // Ignore trailing-SL moves smaller than this — avoids a DB write every ~1s cycle for
     // sub-rupee noise (55.1 → 55.2 → 55.3 ...); only commits once the move is meaningful.
@@ -26,20 +29,20 @@ public class ExitWorker : BackgroundService
         IServiceScopeFactory scopeFactory,
         SystemSettingsService settingsService,
         IInstrumentCache instruments,
-        AppErrorLogger errorLogger)
+        AppErrorLogger errorLogger,
+        StopLossOrderCoordinator stopLossCoordinator)
     {
         _logger          = logger;
         _scopeFactory    = scopeFactory;
         _settingsService = settingsService;
         _instruments     = instruments;
         _errorLogger     = errorLogger;
+        _stopLossCoordinator = stopLossCoordinator;
     }
 
     // ── Main loop ─────────────────────────────────────────────────────────────
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("ExitWorker started");
-
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -117,12 +120,6 @@ public class ExitWorker : BackgroundService
 
         // Do NOT return here
         // Existing positions must be protected
-        if (dailyLossHit)
-        {
-            _logger.LogWarning(
-                "Daily loss breached but monitoring {Count} open trades for exit",
-                openSignals.Count);
-        }
         if (openSignals.Count == 0) return;
 
         // Step 3: load latest ticks + option chain + latest ATR per symbol
@@ -145,6 +142,7 @@ public class ExitWorker : BackgroundService
      chainBySymbol,
      latestAtrBySymbol,
      trailingLogRepo,
+     signalRepo,
      isForceExit,
      nowIst,
      orders,
@@ -180,15 +178,12 @@ public class ExitWorker : BackgroundService
 
         if (realizedPnl <= -maxDailyLoss)
         {
-            _logger.LogWarning("Daily loss limit ₹{Limit:F0} reached (realized ₹{Net:F0})", maxDailyLoss, realizedPnl);
             return true;
         }
 
         var unrealizedPnl = await ComputeUnrealizedPnl(paperRepo, tickRepo);
         if (realizedPnl + unrealizedPnl <= -maxDailyLoss)
         {
-            _logger.LogWarning("Daily loss limit ₹{Limit:F0} reached — realized ₹{R:F0} + unrealized −₹{U:F0}",
-                maxDailyLoss, realizedPnl, Math.Max(0m, -unrealizedPnl));
             return true;
         }
 
@@ -331,6 +326,7 @@ public class ExitWorker : BackgroundService
        Dictionary<string, List<OptionChainData>> chainBySymbol,
        Dictionary<string, decimal> latestAtrBySymbol,
        IRepository<TrailingStopLog> trailingLogRepo,
+       IRepository<Signal> signalRepo,
        bool forceExit,
        DateTime nowIst,
        IOrderService orders,
@@ -354,11 +350,6 @@ public class ExitWorker : BackgroundService
             && leg2CurrentLtp == 0
             && !forceExit)
         {
-            _logger.LogWarning(
-                "Leg2 LTP unavailable for {Symbol} signal {Id}",
-                signal.Symbol,
-                signal.Id);
-
             return;
         }
 
@@ -410,6 +401,18 @@ public class ExitWorker : BackgroundService
         }
 
 
+        // Broker-managed SL_M sync — SINGLE/HERO_ZERO live signals only. Self-heals a missing
+        // placement and replaces the resting order whenever OptionSL moved this cycle (ATR
+        // trailing, or TradeCompletionService.CompletePartialExitAsync resetting it to breakeven
+        // after a partial exit — both mutate the same field). Spreads keep the polling-based
+        // OPTION_SL_HIT exit below since their OptionSL is a net two-leg premium.
+        var isLiveSignal = orders.CurrentMode != TradingMode.Paper;
+        if (isLiveSignal && TradingConst.IsSingleLegStrategy(signal.StrategyType))
+        {
+            await SyncStopLossOrderAsync(signal, orders, orderRepo, signalRepo, uow);
+        }
+
+
         // save protection old values
 
         var oldIndexT1Hit =
@@ -454,8 +457,7 @@ public class ExitWorker : BackgroundService
         // ==================================================
         // PAPER TRADING
         // ==================================================
-        var isLive =
-       orders.CurrentMode != TradingMode.Paper;
+        var isLive = isLiveSignal;
         if (!isLive)
         {
             var fakeExitOrder = new Order
@@ -486,11 +488,6 @@ public class ExitWorker : BackgroundService
                 exitPrice,
                 exitReason,
                 leg2CurrentLtp);
-
-
-            _logger.LogInformation(
-                "Paper exit completed Signal {Id}",
-                signal.Id);
 
 
             return;
@@ -525,12 +522,6 @@ public class ExitWorker : BackgroundService
 
             return;
         }
-
-
-        _logger.LogInformation(
-            "Live exit order submitted Signal={SignalId} Order={OrderId}",
-            signal.Id,
-            exitOrderId);
     }
 
     // ── 4b: MFE / MAE update ─────────────────────────────────────────────────
@@ -689,11 +680,6 @@ public class ExitWorker : BackgroundService
 
         if (optionLtp > 0 && optionLtp < 2)
         {
-            _logger.LogWarning(
-                "Hero-Zero detected premium {Ltp} {Symbol}",
-                optionLtp,
-                signal.Symbol);
-
             return (
                 TradingConst.ExitReason.HeroZero,
                 exitPrice);
@@ -747,12 +733,6 @@ public class ExitWorker : BackgroundService
                     signal.ProtectedSL =
                         signal.OptionLtp * 0.97m;
                 }
-
-
-                _logger.LogInformation(
-                    "Index T1 reached {Symbol}. Protected SL moved to {SL}",
-                    signal.Symbol,
-                    signal.ProtectedSL);
             }
         }
 
@@ -777,14 +757,45 @@ public class ExitWorker : BackgroundService
         // ================================
         // 5. OPTION STOPLOSS
         // ================================
-
-        if (triggerLtp > 0
-            && signal.OptionSL > 0
-            && triggerLtp <= signal.OptionSL)
+        // SINGLE/HERO_ZERO: the broker-managed SL_M order owns this trigger now — ExitWorker no
+        // longer fires a MARKET exit on crossing (that was the source of the slippage this whole
+        // change exists to remove). The one exception is the bounded fallback below, gated on our
+        // OWN tracked "no resting SL_M right now" state, not on price — it only exists to cover a
+        // broker/API outage where PlaceStopLossOrderAsync keeps failing.
+        // Spreads (BULL_SPREAD/BEAR_SPREAD) are unaffected — their OptionSL is a net two-leg
+        // premium that can't be a single broker order, so they keep the original crossing check.
+        if (triggerLtp > 0 && signal.OptionSL > 0)
         {
-            return (
-                TradingConst.ExitReason.OptionSlHit,
-                exitPrice);
+            if (!TradingConst.IsSingleLegStrategy(signal.StrategyType))
+            {
+                if (triggerLtp <= signal.OptionSL)
+                {
+                    return (
+                        TradingConst.ExitReason.OptionSlHit,
+                        exitPrice);
+                }
+            }
+            else if (triggerLtp <= signal.OptionSL
+                     && signal.StopLossStatus != "PLACED"
+                     && signal.LastSlUpdateTime.HasValue)
+            {
+                var cfg = await _settingsService.GetAsync();
+                var noProtectionFor = IstClock.Now - signal.LastSlUpdateTime.Value;
+                if (noProtectionFor.TotalSeconds >= cfg.StopLossFallbackTimeoutSeconds)
+                {
+                    _logger.LogCritical(
+                        "SL_M fallback MARKET exit firing for signal {Id} {Symbol} — no resting broker stop for {Secs}s (StopLossStatus={Status})",
+                        signal.Id, signal.Symbol, (int)noProtectionFor.TotalSeconds, signal.StopLossStatus);
+                    await _errorLogger.LogAsync(
+                        "ExitWorker.SL_M_Fallback",
+                        new Exception($"Broker SL_M unavailable for {(int)noProtectionFor.TotalSeconds}s — MARKET fallback fired"),
+                        signal.Symbol, $"SignalId={signal.Id}");
+
+                    return (
+                        TradingConst.ExitReason.OptionSlHit,
+                        exitPrice);
+                }
+            }
         }
 
 
@@ -895,19 +906,24 @@ public class ExitWorker : BackgroundService
 
         if (finalLots <= 0)
         {
-            _logger.LogWarning("No open lots for signal {Id} {Symbol} — skipping close", signal.Id, signal.Symbol);
+            return null;
+        }
+
+        if (!await CancelStopLossBeforeMarketExitAsync(signal, orders, orderRepo, uow))
+        {
             return null;
         }
 
         var exitOrder = new Order
         {
             SignalId = signal.Id,
-            OrderReferenceId = Guid.NewGuid().ToString("N"),
+            OrderReferenceId = Guid.NewGuid().ToString("N")[..20],
             Broker = "GROWW",
             Symbol = !string.IsNullOrWhiteSpace(signal.OptionSymbol) ? signal.OptionSymbol : signal.Symbol,
             Exchange = signal.Exchange,
             Side = "SELL",
             OrderType = "MARKET",
+            OrderPurpose = MapExitReasonToPurpose(exitReason),
             ProductType = "MIS",
             Status = OrderStatus.Pending,
             Quantity = finalLots,
@@ -918,7 +934,7 @@ public class ExitWorker : BackgroundService
         await uow.SaveChangesAsync();
 
         string closeOrderId;
-        try { closeOrderId = await orders.ClosePositionAsync(signal, exitReason, finalLots); }
+        try { closeOrderId = await orders.ClosePositionAsync(signal, exitReason, finalLots, exitOrder.OrderReferenceId); }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Close order FAILED for signal {Id} {Symbol}", signal.Id, signal.Symbol);
@@ -975,6 +991,11 @@ public class ExitWorker : BackgroundService
  j => j.SignalId == signal.Id && j.IsPartial);
         if (alreadyPartial != null) return;
 
+        if (!await CancelStopLossBeforeMarketExitAsync(signal, orders, orderRepo, uow))
+        {
+            return;
+        }
+
 
         var initialQty  = signal.RemainingQty > 0 ? signal.RemainingQty : signal.Quantity;
         var closeLots   = Math.Max((int)Math.Ceiling(initialQty * 0.50m), 1);
@@ -983,12 +1004,13 @@ public class ExitWorker : BackgroundService
         var partialOrder = new Order
         {
             SignalId = signal.Id,
-            OrderReferenceId = Guid.NewGuid().ToString("N"),
+            OrderReferenceId = Guid.NewGuid().ToString("N")[..20],
             Broker = "GROWW",
             Symbol = !string.IsNullOrWhiteSpace(signal.OptionSymbol) ? signal.OptionSymbol : signal.Symbol,
             Exchange = signal.Exchange,
             Side = "SELL",
             OrderType = "MARKET",
+            OrderPurpose = Trading.Domain.OrderPurpose.PartialExit,
             ProductType = "MIS",
             Status = OrderStatus.Pending,
             Quantity = closeLots,
@@ -999,7 +1021,7 @@ public class ExitWorker : BackgroundService
         await uow.SaveChangesAsync();
 
         string partialOrderId;
-        try { partialOrderId = await orders.ClosePositionAsync(signal, TradingConst.ExitReason.OptionT1Hit, closeLots); }
+        try { partialOrderId = await orders.ClosePositionAsync(signal, TradingConst.ExitReason.OptionT1Hit, closeLots, partialOrder.OrderReferenceId); }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Partial close FAILED for signal {Id}", signal.Id);
@@ -1071,14 +1093,68 @@ public class ExitWorker : BackgroundService
 
 
         await uow.SaveChangesAsync();
-
-
-        _logger.LogInformation(
-            "Partial exit submitted Signal={Id} Order={Order}",
-            signal.Id,
-            partialOrderId);
-
-        _logger.LogInformation("T1 PARTIAL EXIT — {Lots} lots @ ₹{Ltp:F1} | SL→BE ₹{BE:F1} | {Symbol}",
-            closeLots, optionLtp, signal.OptionLtp, signal.Symbol);
     }
+
+    // ── Broker-managed SL_M — sync (self-heal / trailing replace) ────────────────────────────
+    // Called every cycle for active SINGLE/HERO_ZERO live signals, after UpdateTrailingSL may
+    // have moved signal.OptionSL. Cancel-then-place, never place-then-cancel: two simultaneous
+    // resting SELL orders risk a double fill, which is strictly worse than a brief protection
+    // gap during the cancel→place window. Placement/cancellation both delegate to
+    // StopLossOrderCoordinator, shared with BrokerOrderSyncWorker (initial placement) and
+    // BrokerPositionSyncWorker (restart recovery) so the retry-cap/OrderPurpose bookkeeping
+    // lives in exactly one place.
+    private async Task SyncStopLossOrderAsync(
+        Signal signal,
+        IOrderService orders,
+        IRepository<Order> orderRepo,
+        IRepository<Signal> signalRepo,
+        IUnitOfWork uow)
+    {
+        if (signal.OptionSL <= 0) return;
+
+        var desiredQty = signal.RemainingQty > 0 ? signal.RemainingQty : signal.Quantity;
+
+        if (string.IsNullOrEmpty(signal.StopLossOrderId))
+        {
+            // Self-heals a placement that failed at activation, AND handles the case right after
+            // a partial exit completes elsewhere (TradeCompletionService.CompletePartialExitAsync
+            // resets OptionSL to breakeven but doesn't itself talk to the broker). Internally a
+            // no-op once StopLossRetryCount hits the configured cap.
+            await _stopLossCoordinator.TryPlaceAsync(signal, signal.OptionSL, desiredQty, orders, orderRepo, signalRepo, uow);
+            return;
+        }
+
+        // Tolerance guards float/rounding noise so a no-op cycle doesn't churn cancel/replace.
+        if (Math.Abs(signal.StopLossTriggerPrice - signal.OptionSL) < 0.05m)
+            return;
+
+        if (!await _stopLossCoordinator.TryCancelAsync(signal, orders, orderRepo, uow))
+            return; // already filled, or unconfirmed — coordinator logged the reason; retry next cycle
+
+        await _stopLossCoordinator.TryPlaceAsync(signal, signal.OptionSL, desiredQty, orders, orderRepo, signalRepo, uow);
+    }
+
+    // ── Broker-managed SL_M — cancel before any MARKET sell ──────────────────────────────────
+    // Called from ClosePosition/HandlePartialExit before T1/T2/ForceExit/HeroZero/ProtectedSL/
+    // IndexSL fire a MARKET sell, so the resting SL_M can't also fill (double sell). MUST run
+    // before the partial/full SELL is placed, never after — cancelling only after the market
+    // sell would leave a window where both orders are live simultaneously. Returns false if the
+    // caller must abort the MARKET exit this cycle (SL_M already filled, or its fate is
+    // unconfirmed) — retried automatically next cycle since DetermineExitReason re-evaluates
+    // every second.
+    private Task<bool> CancelStopLossBeforeMarketExitAsync(
+        Signal signal,
+        IOrderService orders,
+        IRepository<Order> orderRepo,
+        IUnitOfWork uow)
+        => _stopLossCoordinator.TryCancelAsync(signal, orders, orderRepo, uow);
+
+    // ── Exit reason → OrderPurpose ────────────────────────────────────────────────────────────
+    private static string MapExitReasonToPurpose(string exitReason) => exitReason switch
+    {
+        TradingConst.ExitReason.OptionT1Hit or TradingConst.ExitReason.OptionT2Hit => Trading.Domain.OrderPurpose.Target,
+        TradingConst.ExitReason.ForceExitEod => Trading.Domain.OrderPurpose.ForceExit,
+        TradingConst.ExitReason.OptionSlHit => Trading.Domain.OrderPurpose.StopLoss,
+        _ => Trading.Domain.OrderPurpose.Exit, // HeroZero / IndexSlHit / PROTECTED_SL_HIT
+    };
 }

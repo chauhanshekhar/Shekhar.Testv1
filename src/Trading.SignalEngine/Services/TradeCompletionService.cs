@@ -44,6 +44,19 @@ namespace Trading.SignalEngine.Services;
         Order exitOrder,
         string exitReason)
     {
+        // Idempotency guard — mirrors CompletePartialExitAsync's check. Defends against a
+        // future caller reaching this twice for the same exit order (today, order.Status
+        // flips to a terminal value in the same SaveChangesAsync as this method's, which
+        // keeps BrokerOrderSyncWorker from retrying it — this guard removes the dependency
+        // on that invariant instead of relying on it silently).
+        var existing =
+            await _journalRepo.FirstOrDefaultAsync(
+                j => j.SignalId == signal.Id
+                  && j.ExitOrderId == exitOrder.Id
+                  && !j.IsPartial);
+
+        if (existing != null)
+            return;
 
         var entryOrder =
             (await _orderRepo.FindAsync(

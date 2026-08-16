@@ -33,7 +33,6 @@ public class TelegramWorker : BackgroundService
     {
         if (_bot is null || string.IsNullOrWhiteSpace(_chatId))
         {
-            _logger.LogWarning("Telegram not configured — TelegramWorker idle.");
             return;
         }
 

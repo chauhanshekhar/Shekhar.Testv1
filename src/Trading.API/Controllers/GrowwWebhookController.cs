@@ -42,8 +42,6 @@ public class GrowwWebhookController : ControllerBase
         using var reader = new StreamReader(Request.Body);
         var body = await reader.ReadToEndAsync();
 
-        _logger.LogInformation("Groww Webhook order: {Body}", body);
-
         if (string.IsNullOrWhiteSpace(body))
             return Ok();
 
@@ -55,9 +53,8 @@ public class GrowwWebhookController : ControllerBase
         {
             dto = GrowwJsonHelper.Deserialize<GrowwOrderWebhookDto>(body);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            _logger.LogWarning(ex, "Webhook parse failed: {Body}", body);
             return Ok();
         }
 
@@ -105,9 +102,6 @@ public class GrowwWebhookController : ControllerBase
             await _uow.SaveChangesAsync();
         }
 
-        _logger.LogInformation("Order {OrderId} → {Status} (filled {Filled}/{Qty} @ {Avg})",
-            dto.GrowwOrderId, dto.OrderStatus, dto.FilledQuantity, dto.Quantity, dto.AverageFillPrice);
-
         await _notifier.SendSignalAsync(new Signal
         {
             Symbol = dto.TradingSymbol,
@@ -123,7 +117,6 @@ public class GrowwWebhookController : ControllerBase
         var secret = _configuration["Groww:WebhookSecret"];
         if (string.IsNullOrWhiteSpace(secret))
         {
-            _logger.LogWarning("Groww webhook rejected because Groww:WebhookSecret is not configured.");
             return false;
         }
 

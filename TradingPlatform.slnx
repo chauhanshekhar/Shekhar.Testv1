@@ -5,6 +5,7 @@
     <Project Path="src/Trading.Domain/Trading.Domain.csproj" />
     <Project Path="src/Trading.Infrastructure/Trading.Infrastructure.csproj" />
     <Project Path="src/Trading.SignalEngine/Trading.SignalEngine.csproj" />
+    <Project Path="src/Trading.Tests/Trading.Tests.csproj" />
     <Project Path="src/Trading.Worker/Trading.Worker.csproj" />
   </Folder>
 </Solution>

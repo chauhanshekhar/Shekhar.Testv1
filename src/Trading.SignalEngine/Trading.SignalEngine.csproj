@@ -1,6 +1,12 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>Trading.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Trading.Application\Trading.Application.csproj" />
     <ProjectReference Include="..\Trading.Domain\Trading.Domain.csproj" />
     <ProjectReference Include="..\Trading.Infrastructure\Trading.Infrastructure.csproj" />

@@ -12,6 +12,7 @@ public class PlaceOrderRequestBuilder
     private string _tradingSymbol = "";
     private int _quantity = 1;
     private decimal _price = 0;
+    private decimal _triggerPrice = 0;
     private string _exchange = GrowwExchange.Nse;
     private string _segment = GrowwSegment.Fno;
     private string _product = GrowwProduct.Mis;
@@ -46,6 +47,9 @@ public class PlaceOrderRequestBuilder
     public PlaceOrderRequestBuilder AsLimit()
     { _orderType = GrowwOrderType.Limit; return this; }
 
+    public PlaceOrderRequestBuilder WithTriggerPrice(decimal triggerPrice)
+    { _triggerPrice = triggerPrice; return this; }
+
     // ── Convenience: wire everything from a Signal for an ENTRY order ─────────
 
     public PlaceOrderRequestBuilder FromSignalEntry(Signal signal, int contractQty, string? orderReferenceId = null)
@@ -74,6 +78,23 @@ public class PlaceOrderRequestBuilder
         _exchange        = signal.Exchange == "BSE" ? GrowwExchange.Bse : GrowwExchange.Nse;
         _transactionType = GrowwTransactionType.Sell;  // always SELL to close the bought option
         _orderType       = GrowwOrderType.Market;
+        if (!string.IsNullOrEmpty(orderReferenceId)) _orderReferenceId = orderReferenceId;
+        return this;
+    }
+
+    // ── Convenience: wire everything from a Signal for a broker-managed SL_M stop loss ────
+
+    public PlaceOrderRequestBuilder FromSignalStopLoss(Signal signal, int contractQty, decimal triggerPrice, string? orderReferenceId = null)
+    {
+        _tradingSymbol   = !string.IsNullOrWhiteSpace(signal.OptionSymbol)
+                           ? signal.OptionSymbol
+                           : signal.Symbol;
+        _quantity        = contractQty;
+        _price           = 0;
+        _triggerPrice    = triggerPrice;
+        _exchange        = signal.Exchange == "BSE" ? GrowwExchange.Bse : GrowwExchange.Nse;
+        _transactionType = GrowwTransactionType.Sell;  // SELL to protect the bought option
+        _orderType       = GrowwOrderType.SlM;
         if (!string.IsNullOrEmpty(orderReferenceId)) _orderReferenceId = orderReferenceId;
         return this;
     }
@@ -109,6 +130,7 @@ public class PlaceOrderRequestBuilder
         TradingSymbol = _tradingSymbol,
         Quantity = _quantity,
         Price = _price,
+        TriggerPrice = _triggerPrice,
         Exchange = _exchange,
         Segment = _segment,
         Product = _product,

@@ -15,7 +15,6 @@ internal static class SignalEngineExtensions
         services.AddScoped<RsiService>();
         services.AddScoped<AtrService>();
         services.AddScoped<AtrRiskService>();
-        services.AddScoped<OptionTargetService>();
         services.AddScoped<PcrService>();
         services.AddScoped<MarketRegimeService>();
         services.AddScoped<MarketClassificationService>();
@@ -47,6 +46,7 @@ internal static class SignalEngineExtensions
         services.AddSingleton<SystemSettingsService>();
         services.AddScoped<StrategyPerformanceService>();
         services.AddScoped<TradeCompletionService>();
+        services.AddSingleton<StopLossOrderCoordinator>();
         return services;
     }
 }

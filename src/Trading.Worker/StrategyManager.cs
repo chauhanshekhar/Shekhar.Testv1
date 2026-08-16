@@ -31,7 +31,8 @@ public record SignalSelectionResult(
     SelectedStrategy Strategy,
     decimal Confidence,
     string? BlockedReason,
-    string? BlockedBy);
+    string? BlockedBy,
+    SignalScore? Score = null);
 
 public class StrategyManager
 {
@@ -72,9 +73,6 @@ public class StrategyManager
         var strategyContext = await BuildStrategyContextAsync(ctx, market, symbol);
         var decision = await _selector.Select(strategyContext);
 
-        _logger.LogInformation("StrategyManager → {Strategy} [{Symbol}] — {Reason}",
-            decision.Strategy, symbol, decision.Reason);
-
         var engineResult = decision.Strategy switch
         {
             SelectedStrategy.Expiry => await RunExpiry(ctx, market, symbol),
@@ -93,31 +91,22 @@ public class StrategyManager
             var reason = engineResult.FailureReasons.Count > 0
                 ? string.Join(" | ", engineResult.FailureReasons)
                 : decision.Reason;
-            return new SignalSelectionResult(null, decision.MarketState, decision.Strategy, 0m, reason, blockedBy);
+            return new SignalSelectionResult(null, decision.MarketState, decision.Strategy, 0m, reason, blockedBy,
+                engineResult.Score);
         }
 
         var signal = engineResult.Signal;
         if (signal.Confidence < 70m)
         {
-            _logger.LogInformation(
-                "Signal suppressed. Strategy={Strategy}, Symbol={Symbol}, Confidence={Confidence}",
-                decision.Strategy,
-                symbol,
-                signal.Confidence);
-
             return new SignalSelectionResult(null, decision.MarketState, decision.Strategy, signal.Confidence,
-                $"Confidence {signal.Confidence:F0} below minimum 70", blockedBy);
+                $"Confidence {signal.Confidence:F0} below minimum 70", blockedBy, engineResult.Score);
         }
 
         var lotDecision = await _lotSizing.DetermineAsync(ctx, market, signal.Confidence);
         if (lotDecision.Lots <= 0)
         {
-            _logger.LogInformation(
-                "Signal suppressed by lot sizing. Strategy={Strategy}, Symbol={Symbol}, Reason={Reason}",
-                decision.Strategy, symbol, lotDecision.Reason);
-
             return new SignalSelectionResult(null, decision.MarketState, decision.Strategy, signal.Confidence,
-                lotDecision.Reason, blockedBy);
+                lotDecision.Reason, blockedBy, engineResult.Score);
         }
         signal.Quantity = lotDecision.Lots;
         signal.SelectedStrategy = decision.Strategy.ToString();
@@ -126,7 +115,8 @@ public class StrategyManager
 
         await LogExecutionAsync(symbol, strategyContext, decision, signal);
 
-        return new SignalSelectionResult(signal, decision.MarketState, decision.Strategy, signal.Confidence, null, null);
+        return new SignalSelectionResult(signal, decision.MarketState, decision.Strategy, signal.Confidence, null, null,
+            engineResult.Score);
     }
 
     // ── Explainable decision summary — MarketState/strategy/indicators/historical win rate/confidence ──
@@ -192,12 +182,20 @@ public class StrategyManager
     // ── Engine runners ────────────────────────────────────────────────────────
     private SignalGenerationResult RunDirectional(SignalContext ctx, MarketSnapshot market, string symbol)
     {
+        // Entry trigger candle: 5m EMA stays the trend filter regardless of this setting —
+        // only which candle drives body%/direction confirmation changes. Default follows
+        // trading mode (Paper trials the 1m trigger, Live keeps the proven 5m one) until
+        // this StrategySetting is explicitly set either way.
+        var defaultToOneMin = ctx.Orders.CurrentMode == TradingMode.Live;
+        var useOneMinTrigger = ctx.StrategySettings.GetBool("UseOneMinuteEntryCandle", symbol, defaultToOneMin);
+        var triggerCandle = useOneMinTrigger ? market.LastClosed1mCandle : market.LastClosed5mCandle;
+
         // Confidence gate is applied once, centrally, in SelectSignalAsync — not here.
         return ctx.Engine.GenerateSignalDetailed(
             symbol, market.Ltp, market.Ema20, market.Ema50,
             market.PcrValue, market.Rsi, market.CurrentVolume, market.AvgVolume20,
             market.PriceChangePct, market.AtrPct, market.AtrRaw, market.OptionChain,
-            market.StrategyHint, market.Ema20_5m, market.Ema50_5m, market.LastClosed5mCandle);
+            market.StrategyHint, market.Ema20_5m, market.Ema50_5m, triggerCandle);
     }
 
     private async Task<SignalGenerationResult> RunExpiry(SignalContext ctx, MarketSnapshot market, string symbol)
@@ -229,7 +227,6 @@ public class StrategyManager
     private async Task LogExecutionAsync(string symbol, StrategyContext strategyContext, StrategyDecision decision, Signal signal)
     {
         var explainable = BuildExplainableReason(strategyContext, decision, signal);
-        _logger.LogInformation("StrategyManager decision [{Symbol}] — {Explainable}", symbol, explainable);
 
         try
         {
@@ -244,9 +241,8 @@ public class StrategyManager
             });
             await _uow.SaveChangesAsync();
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            _logger.LogWarning(ex, "StrategyManager: failed to persist execution log — continuing");
         }
     }
 

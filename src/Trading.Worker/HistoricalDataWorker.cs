@@ -48,12 +48,8 @@ public class HistoricalDataWorker : BackgroundService
         var instruments = _instrumentCache.GetActive();
         if (instruments.Count == 0)
         {
-            _logger.LogDebug("HistoricalDataWorker: no active instruments");
             return;
         }
-
-        _logger.LogInformation(
-            "HistoricalDataWorker: fetching candles for {Count} instrument(s)", instruments.Count);
 
         foreach (var instrument in instruments)
         {
@@ -157,14 +153,6 @@ public class HistoricalDataWorker : BackgroundService
             candleSymbol,
             candles,
             ct);
-
-        _logger.LogInformation(
-            "{Symbol} {Interval} synced {Count} candles ({From} -> {To})",
-            instrument.Symbol,
-            interval,
-            candles.Count,
-            fromIst,
-            nowIst);
     }
     private async Task UpsertCandlesAsync(
      IRepository<Candle> repo,

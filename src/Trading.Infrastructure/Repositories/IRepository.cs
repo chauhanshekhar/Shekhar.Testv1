@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using Microsoft.EntityFrameworkCore.Query;
 
 namespace Trading.Infrastructure.Repositories;
 
@@ -44,6 +45,19 @@ public interface IRepository<T> where T : class
     /// Requires EF Core 7+.  Returns the number of rows deleted.
     /// </summary>
     Task<int> ExecuteDeleteAsync(Expression<Func<T, bool>> predicate);
+
+    /// <summary>
+    /// Issues a single bulk UPDATE … WHERE directly to the database and returns rows affected.
+    /// Bypasses the change tracker/identity map entirely, so — unlike a tracked-entity
+    /// read-then-save — it always hits the database and sees concurrent writers' committed
+    /// changes. Use for atomic conditional claims (e.g. "only proceed if nobody else already
+    /// claimed this row"), which a load-then-save can't guarantee across separate DbContext
+    /// instances/processes. Requires EF Core 7+ (EF Core 10 changed the setter parameter from
+    /// SetPropertyCalls&lt;T&gt; to UpdateSettersBuilder&lt;T&gt;).
+    /// </summary>
+    Task<int> ExecuteUpdateAsync(
+        Expression<Func<T, bool>> predicate,
+        Action<UpdateSettersBuilder<T>> setPropertyCalls);
 
     /// <summary>EF-translated COUNT(*) WHERE — no rows loaded into memory.</summary>
     Task<int> CountAsync(Expression<Func<T, bool>> predicate);
