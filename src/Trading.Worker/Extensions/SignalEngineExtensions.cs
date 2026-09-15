@@ -1,9 +1,11 @@
+﻿using Trading.Application.Interfaces;
 using Trading.Infrastructure.Services;
 using Trading.SignalEngine.Scoring.Ranking;
 using Trading.SignalEngine.Scoring.Services;
 using Trading.SignalEngine.Services;
 using Trading.SignalEngine.Strategies;
-using Trading.SignalEngine.Strategies.Expiry;
+using Trading.Worker.Exits;
+using Trading.Worker.Strategies;
 
 namespace Trading.Worker.Extensions;
 
@@ -28,13 +30,41 @@ internal static class SignalEngineExtensions
         services.AddScoped<HeroZeroScoreService>();
         services.AddScoped<StrikeRankingService>();
         services.AddScoped<StrategySelectorService>();
-        services.AddScoped<ExpiryMarketScoreService>();
-        services.AddScoped<ExpiryScoreService>();
-        services.AddScoped<ExpirySignalEngine>();
         services.AddScoped<SignalEngineService>();
         services.AddScoped<HeroZeroSignalEngine>();
         services.AddScoped<AdaptiveLotSizingService>();
+        // Explicit factory rather than AddScoped<T>(): the evaluator has two constructors and
+        // container constructor-selection would decide which one is used. Naming the dependency
+        // here guarantees the settings-aware overload — and therefore the
+        // EnableBankNiftyPutBreakdownRule kill switch — is actually wired in.
+        services.AddScoped(sp => new SingleSignalRuleEvaluator(
+            sp.GetRequiredService<IStrategySettingsService>()));
+        services.AddScoped<FiveMinuteConfirmationService>();
         services.AddScoped<StrategyManager>();
+
+        // ── Per-instrument signal generation ─────────────────────────────────
+        // DefaultInstrumentStrategy is registered as its CONCRETE type only, never as
+        // IInstrumentStrategy — InstrumentStrategyRegistry takes it as an explicit fallback, so a
+        // real per-symbol override can never lose to it on registration order.
+        // To give one instrument its own logic, add:
+        //     services.AddScoped<IInstrumentStrategy, SensexInstrumentStrategy>();
+        // and have it return true from Handles("SENSEX"). Every other symbol is unaffected.
+        // Only do this for genuinely different decision LOGIC — threshold differences already
+        // resolve per-symbol at runtime via IStrategySettingsService, with no redeploy.
+        services.AddScoped<DefaultInstrumentStrategy>();
+        services.AddScoped<InstrumentStrategyRegistry>();
+
+        services.AddScoped<SignalOrderPlacementService>();
+        services.AddScoped<SignalAuditService>();
+
+        // ── Exit pipeline ────────────────────────────────────────────────────
+        // ExitWorker owns the step order; each step is one of these. StopLossSyncService is the
+        // only one with a hard ordering dependency (PositionCloseService must cancel a resting
+        // SL_M before any MARKET sell), and that is expressed by constructor injection.
+        services.AddScoped<StopLossSyncService>();
+        services.AddScoped<TrailingStopService>();
+        services.AddScoped<PositionCloseService>();
+        services.AddScoped<ExitDecisionService>();
         services.AddScoped<HistoricalCandleService>();
         services.AddScoped<PortfolioService>();
         services.AddScoped<PerformanceAnalyticsService>();

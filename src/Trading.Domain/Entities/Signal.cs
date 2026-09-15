@@ -87,6 +87,6 @@ public class Signal
     public string StopLossOrderId { get; set; } = "";        // BrokerOrderId of the resting SL_M sell
     public decimal StopLossTriggerPrice { get; set; }         // trigger price currently resting on the broker
     public string StopLossStatus { get; set; } = "";          // "" / PLACED / CANCELLED / FAILED
-    public DateTime? LastSlUpdateTime { get; set; }           // last placement attempt (success or fail)
+    public DateTime? LastSlUpdateTime { get; set; }           // when a stop was last actually RESTING at the broker (success only, never on a failed attempt) -- ExitWorker's MARKET fallback times unprotected duration from this
     public int StopLossRetryCount { get; set; }                // consecutive failed placement attempts; reset to 0 on success. Persisted so a restart doesn't forget and re-hammer the broker.
 }

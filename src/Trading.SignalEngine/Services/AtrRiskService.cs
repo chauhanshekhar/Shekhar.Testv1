@@ -1,4 +1,4 @@
-using Trading.Infrastructure;
+﻿using Trading.Infrastructure;
 
 namespace Trading.SignalEngine.Services;
 
@@ -7,7 +7,7 @@ public record AtrIndexRisk(decimal StopLoss, decimal Target1, decimal Target2);
 /// <summary>
 /// Single, reusable ATR-based index stop/target calculation — the ONLY place that computes
 /// index-level StopLoss/Target1/Target2. Every strategy that needs them calls in here; nothing
-/// duplicates this math. SignalEngineService, ExpirySignalEngine and HeroZeroSignalEngine are
+/// duplicates this math. SignalEngineService and HeroZeroSignalEngine are
 /// callers; ExitWorker is not — it only ever reads the Signal.StopLoss/Target1/Target2 saved at
 /// signal-creation time and never recalculates them.
 /// </summary>

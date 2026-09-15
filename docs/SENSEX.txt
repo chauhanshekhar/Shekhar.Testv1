@@ -1,0 +1,755 @@
+
+DECLARE @TargetPoints DECIMAL(10,2) = 20;
+DECLARE @SLPoints     DECIMAL(10,2) = 20;
+
+;WITH Base AS
+(
+    SELECT
+        s.Id,
+        s.SnapshotTime,
+        s.Symbol,
+        s.Ltp,
+        s.Rsi,
+        s.Rsi5m,
+        s.AtrPct,
+        s.Ema20,
+        s.Ema50,
+        s.Ema20_5m,
+        s.Ema50_5m,
+        s.TrendDirection,
+
+        CASE
+            WHEN s.TrendDirection = 'Bullish'
+                 AND s.Ema20 > s.Ema50
+                 AND s.Ema20_5m > s.Ema50_5m
+                THEN 'CALL'
+
+            WHEN s.TrendDirection = 'Bearish'
+                 AND s.Ema20 < s.Ema50
+                 AND s.Ema20_5m < s.Ema50_5m
+                THEN 'PUT'
+        END AS Direction,
+
+        CASE
+            WHEN s.Rsi5m < 40 THEN 'R5_<40'
+            WHEN s.Rsi5m < 45 THEN 'R5_40-44'
+            WHEN s.Rsi5m < 50 THEN 'R5_45-49'
+            WHEN s.Rsi5m < 55 THEN 'R5_50-54'
+            WHEN s.Rsi5m < 60 THEN 'R5_55-59'
+            WHEN s.Rsi5m < 65 THEN 'R5_60-64'
+            WHEN s.Rsi5m < 70 THEN 'R5_65-69'
+            ELSE 'R5_70+'
+        END AS Rsi5mRange,
+
+        CASE
+            WHEN s.Rsi < 40 THEN 'R1_<40'
+            WHEN s.Rsi < 45 THEN 'R1_40-44'
+            WHEN s.Rsi < 50 THEN 'R1_45-49'
+            WHEN s.Rsi < 55 THEN 'R1_50-54'
+            WHEN s.Rsi < 60 THEN 'R1_55-59'
+            WHEN s.Rsi < 65 THEN 'R1_60-64'
+            ELSE 'R1_65+'
+        END AS Rsi1mRange,
+
+        CASE
+            WHEN s.AtrPct < 0.020 THEN 'ATR_<0.020'
+            WHEN s.AtrPct < 0.025 THEN 'ATR_0.020-0.024'
+            WHEN s.AtrPct < 0.030 THEN 'ATR_0.025-0.029'
+            WHEN s.AtrPct < 0.035 THEN 'ATR_0.030-0.034'
+            WHEN s.AtrPct < 0.040 THEN 'ATR_0.035-0.039'
+            WHEN s.AtrPct < 0.050 THEN 'ATR_0.040-0.049'
+            ELSE 'ATR_0.050+'
+        END AS AtrRange
+
+    FROM IndicatorSnapshots s
+
+    WHERE s.Symbol = 'SENSEX'
+
+      AND s.Ltp IS NOT NULL
+      AND s.Rsi IS NOT NULL
+      AND s.Rsi5m IS NOT NULL
+      AND s.AtrPct IS NOT NULL
+
+      AND
+      (
+          (
+              s.TrendDirection = 'Bullish'
+              AND s.Ema20 > s.Ema50
+              AND s.Ema20_5m > s.Ema50_5m
+          )
+          OR
+          (
+              s.TrendDirection = 'Bearish'
+              AND s.Ema20 < s.Ema50
+              AND s.Ema20_5m < s.Ema50_5m
+          )
+      )
+),
+
+TargetHit AS
+(
+    SELECT
+        b.Id,
+        MIN(s2.SnapshotTime) AS TargetTime
+
+    FROM Base b
+
+    JOIN IndicatorSnapshots s2
+        ON s2.Symbol = b.Symbol
+       AND s2.SnapshotTime > b.SnapshotTime
+       AND s2.SnapshotTime <= DATEADD(MINUTE,15,b.SnapshotTime)
+
+       AND
+       (
+           -- CALL target
+           (
+               b.Direction = 'CALL'
+               AND s2.Ltp >= b.Ltp + @TargetPoints
+           )
+
+           OR
+
+           -- PUT target
+           (
+               b.Direction = 'PUT'
+               AND s2.Ltp <= b.Ltp - @TargetPoints
+           )
+       )
+
+    GROUP BY b.Id
+),
+
+SLHit AS
+(
+    SELECT
+        b.Id,
+        MIN(s2.SnapshotTime) AS SLTime
+
+    FROM Base b
+
+    JOIN IndicatorSnapshots s2
+        ON s2.Symbol = b.Symbol
+       AND s2.SnapshotTime > b.SnapshotTime
+       AND s2.SnapshotTime <= DATEADD(MINUTE,15,b.SnapshotTime)
+
+       AND
+       (
+           -- CALL SL
+           (
+               b.Direction = 'CALL'
+               AND s2.Ltp <= b.Ltp - @SLPoints
+           )
+
+           OR
+
+           -- PUT SL
+           (
+               b.Direction = 'PUT'
+               AND s2.Ltp >= b.Ltp + @SLPoints
+           )
+       )
+
+    GROUP BY b.Id
+),
+
+Results AS
+(
+    SELECT
+        b.*,
+
+        CASE
+            WHEN t.TargetTime IS NOT NULL
+             AND (
+                    sl.SLTime IS NULL
+                    OR t.TargetTime < sl.SLTime
+                 )
+            THEN 1
+            ELSE 0
+        END AS TargetFirst,
+
+        CASE
+            WHEN sl.SLTime IS NOT NULL
+             AND (
+                    t.TargetTime IS NULL
+                    OR sl.SLTime < t.TargetTime
+                 )
+            THEN 1
+            ELSE 0
+        END AS SLFirst,
+
+        CASE
+            WHEN t.TargetTime IS NULL
+             AND sl.SLTime IS NULL
+            THEN 1
+            ELSE 0
+        END AS Neither
+
+    FROM Base b
+
+    LEFT JOIN TargetHit t
+        ON t.Id = b.Id
+
+    LEFT JOIN SLHit sl
+        ON sl.Id = b.Id
+)
+
+SELECT
+    Direction,
+    Rsi5mRange,
+    Rsi1mRange,
+    AtrRange,
+
+    COUNT(*) AS Samples,
+
+    SUM(TargetFirst) AS TargetFirst,
+    SUM(SLFirst) AS SLFirst,
+    SUM(Neither) AS Neither,
+
+    CAST(
+        SUM(TargetFirst) * 100.0 / COUNT(*)
+        AS DECIMAL(10,2)
+    ) AS TargetFirstRate,
+
+    CAST(
+        SUM(SLFirst) * 100.0 / COUNT(*)
+        AS DECIMAL(10,2)
+    ) AS SLFirstRate,
+
+    CAST(
+        (SUM(TargetFirst) - SUM(SLFirst)) * 100.0
+        / COUNT(*)
+        AS DECIMAL(10,2)
+    ) AS NetRate
+
+FROM Results
+
+WHERE Direction IS NOT NULL
+
+GROUP BY
+    Direction,
+    Rsi5mRange,
+    Rsi1mRange,
+    AtrRange
+
+HAVING COUNT(*) >= 100
+
+ORDER BY
+    Direction,
+    TargetFirstRate DESC,
+    SLFirstRate ASC,
+    Samples DESC;
+
+;WITH Base AS
+(
+    SELECT
+        s.Id,
+        s.SnapshotTime,
+        s.Symbol,
+        s.Ltp,
+
+        s.Ema20,
+        s.Ema50,
+
+        s.Ema20_5m,
+        s.Ema50_5m,
+
+        s.Rsi,
+        s.Rsi5m,
+
+        s.AtrPct,
+
+        s.TrendDirection,
+
+        CASE
+            WHEN s.TrendDirection = 'Bullish'
+                 AND s.Ema20_5m > s.Ema50_5m
+                 AND s.Ema20 > s.Ema50
+                THEN 'CALL'
+
+            WHEN s.TrendDirection = 'Bearish'
+                 AND s.Ema20_5m < s.Ema50_5m
+                 AND s.Ema20 < s.Ema50
+                THEN 'PUT'
+        END AS Direction,
+
+        CASE
+            WHEN s.Rsi5m < 40 THEN 'R5_<40'
+            WHEN s.Rsi5m < 45 THEN 'R5_40-44'
+            WHEN s.Rsi5m < 50 THEN 'R5_45-49'
+            WHEN s.Rsi5m < 55 THEN 'R5_50-54'
+            WHEN s.Rsi5m < 60 THEN 'R5_55-59'
+            WHEN s.Rsi5m < 65 THEN 'R5_60-64'
+            WHEN s.Rsi5m < 70 THEN 'R5_65-69'
+            ELSE 'R5_70+'
+        END AS Rsi5mRange,
+
+        CASE
+            WHEN s.Rsi < 40 THEN 'R1_<40'
+            WHEN s.Rsi < 45 THEN 'R1_40-44'
+            WHEN s.Rsi < 50 THEN 'R1_45-49'
+            WHEN s.Rsi < 55 THEN 'R1_50-54'
+            WHEN s.Rsi < 60 THEN 'R1_55-59'
+            WHEN s.Rsi < 65 THEN 'R1_60-64'
+            ELSE 'R1_65+'
+        END AS Rsi1mRange,
+
+        CASE
+            WHEN s.AtrPct < 0.020 THEN 'ATR_<0.020'
+            WHEN s.AtrPct < 0.025 THEN 'ATR_0.020-0.024'
+            WHEN s.AtrPct < 0.030 THEN 'ATR_0.025-0.029'
+            WHEN s.AtrPct < 0.035 THEN 'ATR_0.030-0.034'
+            WHEN s.AtrPct < 0.040 THEN 'ATR_0.035-0.039'
+            WHEN s.AtrPct < 0.050 THEN 'ATR_0.040-0.049'
+            ELSE 'ATR_0.050+'
+        END AS AtrRange
+
+    FROM IndicatorSnapshots s
+
+    WHERE s.Symbol = 'SENSEX'
+      AND s.SnapshotTime >= DATEADD(DAY, -18, GETDATE())
+
+      AND s.Ltp IS NOT NULL
+      AND s.Ema20 IS NOT NULL
+      AND s.Ema50 IS NOT NULL
+      AND s.Ema20_5m IS NOT NULL
+      AND s.Ema50_5m IS NOT NULL
+      AND s.Rsi IS NOT NULL
+      AND s.Rsi5m IS NOT NULL
+      AND s.AtrPct IS NOT NULL
+
+      AND s.TrendDirection IN ('Bullish','Bearish')
+),
+
+Filtered AS
+(
+    SELECT *
+    FROM Base
+    WHERE Direction IS NOT NULL
+),
+
+FuturePrices AS
+(
+    SELECT
+        f.*,
+
+        p.Ltp5,
+        p.Ltp10,
+        p.Ltp15
+
+    FROM Filtered f
+
+    OUTER APPLY
+    (
+        SELECT
+            MAX(CASE
+                WHEN s2.SnapshotTime >= DATEADD(MINUTE,5,f.SnapshotTime)
+                 AND s2.SnapshotTime <  DATEADD(MINUTE,6,f.SnapshotTime)
+                THEN s2.Ltp
+            END) AS Ltp5,
+
+            MAX(CASE
+                WHEN s2.SnapshotTime >= DATEADD(MINUTE,10,f.SnapshotTime)
+                 AND s2.SnapshotTime <  DATEADD(MINUTE,11,f.SnapshotTime)
+                THEN s2.Ltp
+            END) AS Ltp10,
+
+            MAX(CASE
+                WHEN s2.SnapshotTime >= DATEADD(MINUTE,15,f.SnapshotTime)
+                 AND s2.SnapshotTime <  DATEADD(MINUTE,16,f.SnapshotTime)
+                THEN s2.Ltp
+            END) AS Ltp15
+
+        FROM IndicatorSnapshots s2
+
+        WHERE s2.Symbol = f.Symbol
+          AND s2.SnapshotTime >= DATEADD(MINUTE,5,f.SnapshotTime)
+          AND s2.SnapshotTime <  DATEADD(MINUTE,16,f.SnapshotTime)
+    ) p
+),
+
+Moves AS
+(
+    SELECT
+        *,
+
+        CASE
+            WHEN Direction = 'CALL'
+                THEN Ltp5 - Ltp
+            WHEN Direction = 'PUT'
+                THEN Ltp - Ltp5
+        END AS Move5,
+
+        CASE
+            WHEN Direction = 'CALL'
+                THEN Ltp10 - Ltp
+            WHEN Direction = 'PUT'
+                THEN Ltp - Ltp10
+        END AS Move10,
+
+        CASE
+            WHEN Direction = 'CALL'
+                THEN Ltp15 - Ltp
+            WHEN Direction = 'PUT'
+                THEN Ltp - Ltp15
+        END AS Move15
+
+    FROM FuturePrices
+
+    WHERE Ltp5 IS NOT NULL
+      AND Ltp10 IS NOT NULL
+      AND Ltp15 IS NOT NULL
+),
+
+Result AS
+(
+    SELECT
+        *,
+
+        CASE
+            WHEN Move5 >= 20 THEN 'TARGET'
+            WHEN Move5 <= -20 THEN 'SL'
+            WHEN Move10 >= 20 THEN 'TARGET'
+            WHEN Move10 <= -20 THEN 'SL'
+            WHEN Move15 >= 20 THEN 'TARGET'
+            WHEN Move15 <= -20 THEN 'SL'
+            ELSE 'NEITHER'
+        END AS FinalResult,
+
+        CASE
+            WHEN Move5 >= 20
+              OR Move10 >= 20
+              OR Move15 >= 20
+                THEN 1
+            ELSE 0
+        END AS HitTarget20,
+
+        CASE
+            WHEN Move5 <= -20
+              OR Move10 <= -20
+              OR Move15 <= -20
+                THEN 1
+            ELSE 0
+        END AS HitSL20
+
+    FROM Moves
+)
+
+SELECT
+
+    Direction,
+
+    Rsi5mRange,
+    Rsi1mRange,
+    AtrRange,
+
+    COUNT(*) AS Samples,
+
+    SUM(CASE WHEN HitTarget20 = 1 THEN 1 ELSE 0 END)
+        AS Target20Hit,
+
+    SUM(CASE WHEN HitSL20 = 1 THEN 1 ELSE 0 END)
+        AS SL20Hit,
+
+    SUM(
+        CASE
+            WHEN HitTarget20 = 0
+             AND HitSL20 = 0
+                THEN 1
+            ELSE 0
+        END
+    ) AS Neither,
+
+    CAST(
+        SUM(CASE WHEN HitTarget20 = 1 THEN 1 ELSE 0 END)
+        * 100.0 / COUNT(*)
+        AS DECIMAL(10,2)
+    ) AS Target20Rate,
+
+    CAST(
+        SUM(CASE WHEN HitSL20 = 1 THEN 1 ELSE 0 END)
+        * 100.0 / COUNT(*)
+        AS DECIMAL(10,2)
+    ) AS SL20Rate,
+
+    CAST(
+        (
+            SUM(CASE WHEN HitTarget20 = 1 THEN 1 ELSE 0 END)
+            -
+            SUM(CASE WHEN HitSL20 = 1 THEN 1 ELSE 0 END)
+        )
+        * 100.0 / COUNT(*)
+        AS DECIMAL(10,2)
+    ) AS NetRate,
+
+    CAST(AVG(Move5) AS DECIMAL(10,2))
+        AS AvgMove5,
+
+    CAST(AVG(Move10) AS DECIMAL(10,2))
+        AS AvgMove10,
+
+    CAST(AVG(Move15) AS DECIMAL(10,2))
+        AS AvgMove15,
+
+    CAST(MIN(Move15) AS DECIMAL(10,2))
+        AS WorstMove15,
+
+    CAST(MAX(Move15) AS DECIMAL(10,2))
+        AS BestMove15
+
+FROM Result
+
+GROUP BY
+    Direction,
+    Rsi5mRange,
+    Rsi1mRange,
+    AtrRange
+
+HAVING COUNT(*) >= 100
+
+ORDER BY
+    Direction,
+    Target20Rate DESC,
+    Samples DESC;
+
+
+
+
+
+;WITH Base AS
+(
+    SELECT
+        s.Id,
+        s.SnapshotTime,
+        s.Symbol,
+        s.Ltp,
+
+        s.Ema20,
+        s.Ema50,
+        s.Ema20_5m,
+        s.Ema50_5m,
+
+        s.Rsi,
+        s.Rsi5m,
+        s.AtrPct,
+        s.TrendDirection,
+
+        CASE
+            WHEN s.TrendDirection = 'Bullish'
+                 AND s.Ema20_5m > s.Ema50_5m
+                 AND s.Ema20 > s.Ema50
+                THEN 'CALL'
+
+            WHEN s.TrendDirection = 'Bearish'
+                 AND s.Ema20_5m < s.Ema50_5m
+                 AND s.Ema20 < s.Ema50
+                THEN 'PUT'
+        END AS Direction,
+
+        CASE
+            WHEN s.Rsi5m < 40 THEN 'R5_<40'
+            WHEN s.Rsi5m < 45 THEN 'R5_40-44'
+            WHEN s.Rsi5m < 50 THEN 'R5_45-49'
+            WHEN s.Rsi5m < 55 THEN 'R5_50-54'
+            WHEN s.Rsi5m < 60 THEN 'R5_55-59'
+            WHEN s.Rsi5m < 65 THEN 'R5_60-64'
+            WHEN s.Rsi5m < 70 THEN 'R5_65-69'
+            ELSE 'R5_70+'
+        END AS Rsi5mRange,
+
+        CASE
+            WHEN s.Rsi < 40 THEN 'R1_<40'
+            WHEN s.Rsi < 45 THEN 'R1_40-44'
+            WHEN s.Rsi < 50 THEN 'R1_45-49'
+            WHEN s.Rsi < 55 THEN 'R1_50-54'
+            WHEN s.Rsi < 60 THEN 'R1_55-59'
+            WHEN s.Rsi < 65 THEN 'R1_60-64'
+            ELSE 'R1_65+'
+        END AS Rsi1mRange,
+
+        CASE
+            WHEN s.AtrPct < 0.020 THEN 'ATR_<0.020'
+            WHEN s.AtrPct < 0.025 THEN 'ATR_0.020-0.024'
+            WHEN s.AtrPct < 0.030 THEN 'ATR_0.025-0.029'
+            WHEN s.AtrPct < 0.035 THEN 'ATR_0.030-0.034'
+            WHEN s.AtrPct < 0.040 THEN 'ATR_0.035-0.039'
+            WHEN s.AtrPct < 0.050 THEN 'ATR_0.040-0.049'
+            ELSE 'ATR_0.050+'
+        END AS AtrRange
+
+    FROM IndicatorSnapshots s
+    WHERE s.Symbol = 'NIFTY'
+      AND s.SnapshotTime >= DATEADD(DAY, -18, GETDATE())
+
+      AND s.Ltp IS NOT NULL
+      AND s.Ema20 IS NOT NULL
+      AND s.Ema50 IS NOT NULL
+      AND s.Ema20_5m IS NOT NULL
+      AND s.Ema50_5m IS NOT NULL
+      AND s.Rsi IS NOT NULL
+      AND s.Rsi5m IS NOT NULL
+      AND s.AtrPct IS NOT NULL
+
+      AND s.TrendDirection IN ('Bullish','Bearish')
+),
+
+Filtered AS
+(
+    SELECT *
+    FROM Base
+    WHERE Direction IS NOT NULL
+),
+
+FuturePrices AS
+(
+    SELECT
+        f.*,
+        p.Ltp5,
+        p.Ltp10,
+        p.Ltp15
+    FROM Filtered f
+
+    OUTER APPLY
+    (
+        SELECT TOP 1
+            s2.Ltp AS Ltp5
+        FROM IndicatorSnapshots s2
+        WHERE s2.Symbol = f.Symbol
+          AND s2.SnapshotTime >= DATEADD(MINUTE,5,f.SnapshotTime)
+          AND s2.SnapshotTime < DATEADD(MINUTE,6,f.SnapshotTime)
+        ORDER BY s2.SnapshotTime
+    ) p5
+
+    OUTER APPLY
+    (
+        SELECT TOP 1
+            s2.Ltp AS Ltp10
+        FROM IndicatorSnapshots s2
+        WHERE s2.Symbol = f.Symbol
+          AND s2.SnapshotTime >= DATEADD(MINUTE,10,f.SnapshotTime)
+          AND s2.SnapshotTime < DATEADD(MINUTE,11,f.SnapshotTime)
+        ORDER BY s2.SnapshotTime
+    ) p10
+
+    OUTER APPLY
+    (
+        SELECT TOP 1
+            s2.Ltp AS Ltp15
+        FROM IndicatorSnapshots s2
+        WHERE s2.Symbol = f.Symbol
+          AND s2.SnapshotTime >= DATEADD(MINUTE,15,f.SnapshotTime)
+          AND s2.SnapshotTime < DATEADD(MINUTE,16,f.SnapshotTime)
+        ORDER BY s2.SnapshotTime
+    ) p15
+
+    CROSS APPLY
+    (
+        SELECT
+            p5.Ltp5,
+            p10.Ltp10,
+            p15.Ltp15
+    ) p
+),
+
+Moves AS
+(
+    SELECT
+        *,
+        CASE
+            WHEN Direction = 'CALL' THEN Ltp5 - Ltp
+            WHEN Direction = 'PUT'  THEN Ltp - Ltp5
+        END AS Move5,
+
+        CASE
+            WHEN Direction = 'CALL' THEN Ltp10 - Ltp
+            WHEN Direction = 'PUT'  THEN Ltp - Ltp10
+        END AS Move10,
+
+        CASE
+            WHEN Direction = 'CALL' THEN Ltp15 - Ltp
+            WHEN Direction = 'PUT'  THEN Ltp - Ltp15
+        END AS Move15
+    FROM FuturePrices
+    WHERE Ltp5 IS NOT NULL
+      AND Ltp10 IS NOT NULL
+      AND Ltp15 IS NOT NULL
+),
+
+Result AS
+(
+    SELECT
+        *,
+        CASE
+            WHEN Move5 >= 20 THEN 'TARGET'
+            WHEN Move5 <= -20 THEN 'SL'
+
+            WHEN Move10 >= 20 THEN 'TARGET'
+            WHEN Move10 <= -20 THEN 'SL'
+
+            WHEN Move15 >= 20 THEN 'TARGET'
+            WHEN Move15 <= -20 THEN 'SL'
+
+            ELSE 'NEITHER'
+        END AS FirstResult
+    FROM Moves
+)
+
+SELECT
+    Direction,
+    Rsi5mRange,
+    Rsi1mRange,
+    AtrRange,
+
+    COUNT(*) AS Samples,
+
+    SUM(CASE WHEN FirstResult = 'TARGET' THEN 1 ELSE 0 END)
+        AS TargetFirst,
+
+    SUM(CASE WHEN FirstResult = 'SL' THEN 1 ELSE 0 END)
+        AS SLFirst,
+
+    SUM(CASE WHEN FirstResult = 'NEITHER' THEN 1 ELSE 0 END)
+        AS Neither,
+
+    CAST(
+        SUM(CASE WHEN FirstResult = 'TARGET' THEN 1 ELSE 0 END)
+        * 100.0 / COUNT(*)
+        AS DECIMAL(10,2)
+    ) AS TargetFirstRate,
+
+    CAST(
+        SUM(CASE WHEN FirstResult = 'SL' THEN 1 ELSE 0 END)
+        * 100.0 / COUNT(*)
+        AS DECIMAL(10,2)
+    ) AS SLFirstRate,
+
+    CAST(
+        (
+            SUM(CASE WHEN FirstResult = 'TARGET' THEN 1 ELSE 0 END)
+            -
+            SUM(CASE WHEN FirstResult = 'SL' THEN 1 ELSE 0 END)
+        )
+        * 100.0 / COUNT(*)
+        AS DECIMAL(10,2)
+    ) AS NetRate,
+
+    CAST(AVG(Move5) AS DECIMAL(10,2)) AS AvgMove5,
+    CAST(AVG(Move10) AS DECIMAL(10,2)) AS AvgMove10,
+    CAST(AVG(Move15) AS DECIMAL(10,2)) AS AvgMove15,
+
+    CAST(MIN(Move15) AS DECIMAL(10,2)) AS WorstMove15,
+    CAST(MAX(Move15) AS DECIMAL(10,2)) AS BestMove15
+
+FROM Result
+
+GROUP BY
+    Direction,
+    Rsi5mRange,
+    Rsi1mRange,
+    AtrRange
+
+HAVING COUNT(*) >= 100
+
+ORDER BY
+    Direction,
+    TargetFirstRate DESC,
+    Samples DESC;

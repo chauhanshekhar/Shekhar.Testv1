@@ -1,4 +1,4 @@
-using Trading.Domain;
+﻿using Trading.Domain;
 using Trading.Domain.Entities;
 using Trading.Infrastructure;
 using Trading.SignalEngine.Services;
@@ -15,7 +15,8 @@ public record MarketSnapshot(
     decimal Ema50,          // 1m — entry timing
     decimal Ema20_5m,       // 5m — trend filter only
     decimal Ema50_5m,       // 5m — trend filter only
-    decimal Rsi,            // 1m
+    decimal Rsi,            // 1m — the value every RSI threshold is calibrated against
+    decimal? Rsi5m,         // 5m — recorded only, drives no decision; null until 15 closed 5m bars exist
     decimal AtrPct,         // 1m
     decimal AtrRaw,         // 1m
     decimal Ltp,
@@ -23,7 +24,20 @@ public record MarketSnapshot(
     decimal CurrentVolume,
     decimal AvgVolume20,
     decimal PriceChangePct,
-    decimal Vwap,
+    // ── Day context, for the CALL day filter ─────────────────────────────────────────────────
+    // Sourced from the latest MarketTick (the broker's own session figures), falling back to the
+    // candle series only when no tick is available.
+    //
+    // DayChangePct is measured against YESTERDAY'S CLOSE and is NOT the same quantity as
+    // PriceChangePct above, which is measured against today's OPEN. A gap-down session can show a
+    // strongly negative DayChangePct while PriceChangePct is positive; the two must not be
+    // conflated. On 2026-09-02 BANKNIFTY opened at 57006 against a 57410 previous close — the two
+    // measures disagreed in sign for the entire session.
+    decimal DayOpen,
+    decimal DayLow,
+    decimal DayHigh,
+    decimal DayChangePct,
+    decimal? Vwap,
     decimal PcrValue,
     string  StrategyHint,
     EconomicEvent? NewsEvent,
@@ -45,6 +59,17 @@ public record MarketSnapshot(
 public static class MarketSnapshotBuilder
 {
     private const int MinCandles1m = 50;
+
+    /// <summary>
+    /// A bar counts as CLOSED only once its full duration has elapsed. The still-forming candle is
+    /// excluded from every series this builder produces, so no trade decision — 1-minute entry
+    /// trigger or 5-minute confirmation — can ever be influenced by a partial bar.
+    ///
+    /// Extracted so that guarantee is directly testable; the expression is unchanged, and
+    /// IstClock.Now is still evaluated per element exactly as before.
+    /// </summary>
+    internal static bool IsClosedBar(DateTime candleTime, int barMinutes, DateTime now) =>
+        candleTime.AddMinutes(barMinutes) <= now;
     public static async Task<MarketSnapshot?> BuildAsync(SignalContext ctx)
     {
         var sym1m = $"{ctx.Symbol}_1m";
@@ -66,7 +91,7 @@ public static class MarketSnapshotBuilder
 
         var indicatorCandles = recent1m
             .OrderBy(c => c.CandleTime)
-            .Where(c => c.CandleTime.AddMinutes(1) <= IstClock.Now)
+            .Where(c => IsClosedBar(c.CandleTime, 1, IstClock.Now))
             .TakeLast(200)
             .ToList();
 
@@ -108,7 +133,7 @@ public static class MarketSnapshotBuilder
 
         var indicatorCandles5m = recent5m
             .OrderBy(c => c.CandleTime)
-            .Where(c => c.CandleTime.AddMinutes(5) <= IstClock.Now)
+            .Where(c => IsClosedBar(c.CandleTime, 5, IstClock.Now))
             .TakeLast(100)
             .ToList();
 
@@ -144,6 +169,21 @@ public static class MarketSnapshotBuilder
             ema50_5m = ctx.Ema.GetEma(closes5m, 50);
         }
 
+        // ── 5m RSI — RECORDED ONLY, drives no decision ───────────────────────
+        // The engine trades on the 1m RSI above; this exists so the value a 5-minute chart shows
+        // is captured next to it. The two legitimately disagree — a 1m RSI(14) is far spikier and
+        // routinely reads 80+ on a move that reads ~63 on 5m — and every RSI threshold in the
+        // system (RsiCallFloor/RsiPutCeiling/RsiBearConfirm, and the BANKNIFTY PUT BREAKDOWN
+        // rule) is calibrated against the 1m value. Nothing here changes that; this column only
+        // makes the gap measurable on real data before any threshold is revisited.
+        //
+        // NULL rather than a stand-in when the series is too short: RsiService returns a neutral
+        // 50 on insufficient data, and persisting that would look like a real reading. RSI(14)
+        // needs 15 closed 5m bars, so this stays null until roughly 75 minutes into the session.
+        decimal? rsi5m = null;
+        if (indicatorCandles5m.Count > 14)
+            rsi5m = ctx.Rsi.GetRsi(indicatorCandles5m.Select(x => x.Close).ToList());
+
         // ── Volume from today's 5m candles only ───────────────────────────────
         decimal currentVolume, avgVolume20;
         if (todayCandles5m.Count >= 2)
@@ -161,10 +201,41 @@ public static class MarketSnapshotBuilder
         var dayOpen = todayCandles.First().Open;
         var priceChangePct = dayOpen > 0 ? (ltp - dayOpen) / dayOpen * 100m : 0m;
 
+        // ── Session values for the CALL day filter, from the broker's own tick ───────────────
+        // MarketTick carries authoritative session figures that beat anything derived from our
+        // candles: Open/High/Low are the SESSION's extremes and Close is the PREVIOUS session's
+        // official close. Verified against the candle series on 2026-09-02 — tick.Close matched
+        // the prior day's last candle close exactly on 8 of 11 symbol-days, and the three
+        // mismatches (-5.40, +49.69, -47.15) are the candle series missing the official closing
+        // print, so the tick is the more accurate of the two. tick.Low also sits slightly BELOW
+        // the candle low, because ticks capture extremes that no recorded minute bar contains.
+        //
+        // priceChangePct above is deliberately LEFT on its candle-derived dayOpen: it feeds the
+        // PUT chain and the IndicatorSnapshot audit column, and this change is CALL-only.
+        var latestTick = recentTicks.Count > 0
+            ? recentTicks.OrderByDescending(t => t.TickTime).First()
+            : null;
+
+        var sessionOpen = latestTick is { Open: > 0 } ? latestTick.Open : dayOpen;
+        var sessionLow = latestTick is { Low: > 0 }
+            ? latestTick.Low
+            : (todayCandles.Count > 0 ? todayCandles.Min(c => c.Low) : 0m);
+        var sessionHigh = latestTick is { High: > 0 }
+            ? latestTick.High
+            : (todayCandles.Count > 0 ? todayCandles.Max(c => c.High) : 0m);
+        var prevClose = latestTick is { Close: > 0 } ? latestTick.Close : yesterdayClose;
+
+        var dayChangePct = prevClose > 0 ? (ltp - prevClose) / prevClose * 100m : 0m;
+
         // ── VWAP — cumulative from today's session open, typical price weighted by volume ────
         var cumulativePriceVolume = todayCandles.Sum(c => (c.High + c.Low + c.Close) / 3m * c.Volume);
         var cumulativeVolume = todayCandles.Sum(c => c.Volume);
-        var vwap = cumulativeVolume > 0 ? cumulativePriceVolume / cumulativeVolume : ltp;
+        // NULL when volume is unavailable, never a fabricated stand-in. Groww does not publish
+        // index candle volume -- every Candle row is Volume=0 -- so cumulativeVolume is always 0
+        // and VWAP is not computable. The old fallback substituted `ltp`, which made the audit
+        // column look like real VWAP data and would silently turn any future "price vs VWAP"
+        // check into "price vs price" (never true). A null forces callers to handle the gap.
+        decimal? vwap = cumulativeVolume > 0 ? cumulativePriceVolume / cumulativeVolume : null;
 
         // ── Option chain ──────────────────────────────────────────────────────
         var chainCutoff = IstClock.Now.AddMinutes(-30);
@@ -196,13 +267,19 @@ public static class MarketSnapshotBuilder
                 .ToDictionary(o => (o.StrikePrice, o.OptionType), o => o.OpenInterest);
 
         var pcrValue = optionChain.Any() ? ctx.Pcr.Calculate(optionChain) : 1m;
+        // Change 2: seed the regime from ROLLING history (indicatorCandles), not today-only.
+        // todayCandles had fewer than 20 bars until ~09:35, which made Classify short-circuit to
+        // Sideways/LOW and MarketRegimeGate hard-block every signal through the opening move.
+        // indicatorCandles is the same rolling series EMA20/EMA50 already use. dayOpen is passed
+        // separately so gap detection still measures today's open, not the oldest rolling bar.
         var marketRegime = ctx.Regime.Classify(
     ctx.Symbol,
-    todayCandles,
+    indicatorCandles,
     ema20,
     ema50,
     yesterdayClose,
-    ctx.Instruments.IsExpiryDay(ctx.Symbol));
+    ctx.Instruments.IsExpiryDay(ctx.Symbol),
+    dayOpen);
 
         // ── Events ────────────────────────────────────────────────────────────
         var upcomingEvents = await ctx.EventRepo.FindAsync(
@@ -215,7 +292,6 @@ public static class MarketSnapshotBuilder
         // ── Audit snapshot (Market Snapshot Audit feature) ─────────────────────
         // Debugging/analytics only — built from indicators already computed above,
         // no extra queries. Not saved here; SignalWorker finishes and persists it once.
-        var volumeRatio = avgVolume20 > 0 ? currentVolume / avgVolume20 : 0m;
         var trendDirection = ema20 > ema50 ? "Bullish" : ema20 < ema50 ? "Bearish" : "Sideways";
         var audit = new IndicatorSnapshot
         {
@@ -229,13 +305,11 @@ public static class MarketSnapshotBuilder
             Ema20_5m = ema20_5m,
             Ema50_5m = ema50_5m,
             Rsi = rsi,
+            Rsi5m = rsi5m,
             AtrRaw = atrRaw,
             AtrPct = atrPct,
             Pcr = pcrValue,
             Vwap = vwap,
-            CurrentVolume = currentVolume,
-            AvgVolume20 = avgVolume20,
-            VolumeRatio = volumeRatio,
             PriceChangePct = priceChangePct,
             TrendDirection = trendDirection,
             MarketRegime = $"{marketRegime.Trend}/{marketRegime.Volatility}",
@@ -252,6 +326,7 @@ public static class MarketSnapshotBuilder
             Ema20_5m: ema20_5m,
             Ema50_5m: ema50_5m,
             Rsi: rsi,
+            Rsi5m: rsi5m,
             AtrPct: atrPct,
             AtrRaw: atrRaw,
             Ltp: ltp,
@@ -259,6 +334,10 @@ public static class MarketSnapshotBuilder
             CurrentVolume: currentVolume,
             AvgVolume20: avgVolume20,
             PriceChangePct: priceChangePct,
+            DayOpen: sessionOpen,
+            DayLow: sessionLow,
+            DayHigh: sessionHigh,
+            DayChangePct: dayChangePct,
             Vwap: vwap,
             PcrValue: pcrValue,
             StrategyHint: strategyHint,

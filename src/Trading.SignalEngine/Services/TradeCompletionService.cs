@@ -227,6 +227,18 @@ namespace Trading.SignalEngine.Services;
         signal.ExitTime =
         IstClock.Now;
 
+        // Record WHY it closed. The exitReason was already being written to the TradeJournal but
+        // never back onto the Signal, so every exit that completes through here — which is every
+        // broker SL_M fill — left Signals.ExitReason NULL while Status read CLOSED. Only the
+        // MARKET-exit path (PositionCloseService) set it, so on 2026-08-31 four of six SENSEX
+        // trades closed with no recorded reason, making them unanalysable.
+        //
+        // Not overwritten when already set: PositionCloseService stamps the intended reason before
+        // the broker call, and that is the more specific value (e.g. OPTION_T2_HIT rather than the
+        // generic reason this completion path was handed).
+        if (string.IsNullOrEmpty(signal.ExitReason))
+            signal.ExitReason = exitReason;
+
 
         await _uow.SaveChangesAsync();
 

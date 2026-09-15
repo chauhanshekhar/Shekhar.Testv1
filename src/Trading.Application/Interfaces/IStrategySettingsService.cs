@@ -1,4 +1,4 @@
-namespace Trading.Application.Interfaces;
+﻿namespace Trading.Application.Interfaces;
 
 /// <summary>
 /// DB-backed, in-memory-cached strategy/risk parameters (ATR/RSI/PCR thresholds, multipliers,
@@ -15,6 +15,17 @@ public interface IStrategySettingsService
     int GetInt(string settingKey, string? symbol, int defaultValue);
     bool GetBool(string settingKey, string? symbol, bool defaultValue);
     string GetString(string settingKey, string? symbol, string defaultValue);
+
+    /// <summary>
+    /// Whether the row backing this key is switched on. Returns TRUE when no row exists, because
+    /// the caller's compiled default then applies and the condition is still in force.
+    ///
+    /// Use this to SKIP A CONDITION ENTIRELY when its threshold row is deactivated. The getters
+    /// cannot do that on their own: a numeric has no safe "off" value - 0 disables a MINIMUM but
+    /// blocks everything on a MAXIMUM (CallRsiCeiling = 0 would mean "RSI &lt;= 0", so no CALL
+    /// would ever pass). Skipping at the condition is direction-agnostic and always correct.
+    /// </summary>
+    bool IsSettingActive(string settingKey, string? symbol);
 
     /// <summary>Reloads all active settings from the database into the in-memory cache.</summary>
     Task ReloadAsync(CancellationToken ct = default);

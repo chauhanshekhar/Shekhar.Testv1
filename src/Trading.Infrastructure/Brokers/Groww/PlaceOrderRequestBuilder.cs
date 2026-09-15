@@ -1,4 +1,4 @@
-using Trading.Application.Models;
+﻿using Trading.Application.Models;
 using Trading.Domain.Entities;
 
 namespace Trading.Infrastructure.Brokers.Groww;
@@ -52,16 +52,31 @@ public class PlaceOrderRequestBuilder
 
     // ── Convenience: wire everything from a Signal for an ENTRY order ─────────
 
-    public PlaceOrderRequestBuilder FromSignalEntry(Signal signal, int contractQty, string? orderReferenceId = null)
+    /// <param name="useMarketOrder">
+    /// MARKET fills immediately; LIMIT rests at the premium quoted when the signal was built and
+    /// simply never fills if the option ticks away from it — which on a slow placement round-trip
+    /// means a missed entry rather than a bad one. Same shape as FromSignalExit, which has always
+    /// used MARKET with price 0.
+    ///
+    /// Slippage is bounded elsewhere: SpreadGate rejects the signal before it reaches here if the
+    /// chosen leg's bid/ask is too wide, and BrokerOrderSyncWorker.ActivateSignalAsync re-anchors
+    /// OptionSL/OptionT1/OptionT2 to the ACTUAL fill price, preserving the intended risk/reward
+    /// ratio — so a fill away from the quote moves the stop with it instead of silently tightening
+    /// the real risk.
+    /// </param>
+    public PlaceOrderRequestBuilder FromSignalEntry(
+        Signal signal, int contractQty, string? orderReferenceId = null, bool useMarketOrder = false)
     {
         _tradingSymbol = !string.IsNullOrWhiteSpace(signal.OptionSymbol)
                            ? signal.OptionSymbol
                            : signal.Symbol;
         _quantity = contractQty;
-        _price = signal.OptionLtp > 0 ? signal.OptionLtp : signal.EntryPrice;
+        _price = useMarketOrder
+            ? 0                                    // MARKET carries no price, as FromSignalExit does
+            : signal.OptionLtp > 0 ? signal.OptionLtp : signal.EntryPrice;
         _exchange        = signal.Exchange == "BSE" ? GrowwExchange.Bse : GrowwExchange.Nse;
         _transactionType = GrowwTransactionType.Buy;   // always BUY the option (CALL or PUT)
-        _orderType       = GrowwOrderType.Limit;
+        _orderType       = useMarketOrder ? GrowwOrderType.Market : GrowwOrderType.Limit;
         if (!string.IsNullOrEmpty(orderReferenceId)) _orderReferenceId = orderReferenceId;
         return this;
     }

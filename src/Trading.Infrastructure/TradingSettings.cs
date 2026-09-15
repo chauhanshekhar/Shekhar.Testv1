@@ -1,4 +1,4 @@
-namespace Trading.Infrastructure;
+﻿namespace Trading.Infrastructure;
 
 public class TradingSettings
 {
@@ -107,51 +107,43 @@ public class TradingSettings
 
 
     // =========================
-    // Expiry Engine
     // =========================
+    // Indicator snapshot outcome tracking (+20 / -20 INDEX points)
+    // =========================
+    // ANALYTICS ONLY — never read by signal generation, order placement or exit management.
+    // Default OFF so deploying the code starts no work against the database; the historical
+    // backfill only begins once this is explicitly switched on.
+    public bool EnableOutcomeTracking { get; set; } = false;
+
+    // Snapshots processed per pass. Each pass issues a fixed number of queries regardless of this
+    // value, so it trades memory for fewer round trips, not more of them.
+    public int OutcomeTrackingBatchSize { get; set; } = 2000;
+
+    // Gap between passes while a backlog is still draining, and while it is caught up.
+    public int OutcomeTrackingIntervalSeconds { get; set; } = 60;
+
+    // Oldest snapshot the backfill will reach back to. Guards against an unbounded first run on a
+    // table that has been accumulating for months.
+    public int OutcomeTrackingBackfillDays { get; set; } = 30;
+
+
+    // Expiry-day routing
+    // =========================
+    // The dedicated Expiry ENGINE is gone — expiry days now route to Directional (before the
+    // gamma-blast boundary) or HeroZero (at/after), which is what StrategySelectorService has
+    // always actually returned. Only the two time boundaries that routing reads survive here;
+    // the engine's own SL/target/score knobs were removed with it, so no one can tune a value
+    // that silently affects nothing.
 
     // First-30-min-of-expiry-day no-trade window — wide spreads, gap traps, IV still settling,
-    // fake breakouts. Used by StrategySelectorService's expiry dispatch, ahead of the existing
-    // ExpiryMorningEndTime/ExpiryGammaBlastStartTime windows below.
+    // fake breakouts. Read by StrategySelectorService's expiry dispatch.
     public TimeSpan ExpiryMorningNoTradeEnd { get; set; }
-        = new(9, 45, 0);
+        = new(9, 30, 0);
 
 
-    public TimeSpan ExpiryMorningEndTime { get; set; }
-        = new(11, 0, 0);
-
-
+    // Directional -> HeroZero handover on expiry day.
     public TimeSpan ExpiryGammaBlastStartTime { get; set; }
         = new(14, 0, 0);
-
-
-    // MarketScore (0-100) gate — below this, ExpirySignalEngine rejects the trade before it even
-    // scores the option chain. A poor market must never be overridden by a high OptionScore.
-    public decimal ExpiryMinMarketScore { get; set; } = 60m;
-
-
-    public decimal ExpiryGammaBlastMinScore { get; set; } = 90;
-
-
-    public decimal ExpiryMorningSLPercent { get; set; } = 25;
-
-    public decimal ExpiryMorningT1Multiplier { get; set; } = 1.3m;
-
-    public decimal ExpiryMorningT2Multiplier { get; set; } = 1.5m;
-
-
-    public decimal ExpiryNormalSLPercent { get; set; } = 35;
-
-    public decimal ExpiryNormalT1Multiplier { get; set; } = 1.5m;
-
-    public decimal ExpiryNormalT2Multiplier { get; set; } = 2m;
-
-
-    public decimal ExpiryGammaSLPercent { get; set; } = 50;
-
-    public decimal ExpiryGammaT1Multiplier { get; set; } = 2;
-
-    public decimal ExpiryGammaT2Multiplier { get; set; } = 5;
 
 
     // =========================

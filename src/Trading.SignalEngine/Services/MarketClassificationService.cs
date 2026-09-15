@@ -28,9 +28,10 @@ public class MarketClassificationService
         decimal ema50_5m,
         decimal atrRaw,
         decimal rsi,
-        decimal vwap,
         decimal ltp,
-        decimal volumeRatio,
+        // vwap / volumeRatio intentionally absent: Groww publishes no index candle volume
+        // (every Candle row is Volume=0), so neither is computable. They used to be accepted
+        // and silently ignored, which implied this classifier considered them.
         decimal priceChangePct,
         bool isGapUp,
         bool isGapDown,

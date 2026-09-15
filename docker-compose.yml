@@ -66,6 +66,12 @@ services:
     environment:
       DOTNET_ENVIRONMENT: Production
 
+      # Groww credentials — real values live in .env (gitignored), never here.
+      # Only the Worker needs them: it runs GrowwTokenRefreshWorker. The API reads
+      # the resulting token from SystemSettings, so it holds no credential.
+      Groww__ApiKey: ${GROWW_API_KEY}
+      Groww__TotpSecret: ${GROWW_TOTP_SECRET}
+
       ConnectionStrings__DefaultConnection: >
         Server=sqlserver;
         Database=TradingDb;

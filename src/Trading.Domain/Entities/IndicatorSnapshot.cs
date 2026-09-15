@@ -1,4 +1,4 @@
-namespace Trading.Domain.Entities;
+﻿namespace Trading.Domain.Entities;
 
 /// <summary>
 /// Audit-only, per-cycle diagnostic row — one per successful MarketSnapshotBuilder.BuildAsync() call.
@@ -20,15 +20,20 @@ public class IndicatorSnapshot
     public decimal Ema20_5m { get; set; }
     public decimal Ema50_5m { get; set; }
 
-    public decimal Rsi { get; set; }
+    public decimal Rsi { get; set; }          // 1m — drives every RSI threshold in the system
+
+    /// <summary>
+    /// 5-minute RSI(14). ANALYTICS ONLY — no gate, engine or rule reads it. Present so the value
+    /// a 5-minute chart displays can be compared against the 1m RSI the engine actually trades on.
+    /// Null until 15 closed 5m bars exist (~75 minutes into the session), rather than the neutral
+    /// 50 RsiService returns on short input, which would be indistinguishable from a real reading.
+    /// </summary>
+    public decimal? Rsi5m { get; set; }
     public decimal AtrRaw { get; set; }
     public decimal AtrPct { get; set; }
     public decimal Pcr { get; set; }
-    public decimal Vwap { get; set; }
+    public decimal? Vwap { get; set; }   // null when volume is unavailable (Groww sends none for indices)
 
-    public decimal CurrentVolume { get; set; }
-    public decimal AvgVolume20 { get; set; }
-    public decimal VolumeRatio { get; set; }
     public decimal PriceChangePct { get; set; }
 
     public string TrendDirection { get; set; } = "";
@@ -51,25 +56,6 @@ public class IndicatorSnapshot
     public decimal? BlockedDelta { get; set; }
     public decimal? BlockedOptionLtp { get; set; }
     public decimal? BlockedChangeInOi { get; set; }
-
-    // Score breakdown from SignalEngineService's scored path (see SignalScore) — populated only
-    // when EnableSignalScoring is on for the symbol; null under the legacy AND-gated path. Carries
-    // the winning candidate's breakdown when a signal was generated, or the higher of the two
-    // (still-blocked) candidates' breakdowns when neither cleared the threshold, so future
-    // backtesting/tuning can see exactly which component(s) were weak.
-    public string? ScoreDirection { get; set; }
-    public int? ScoreTotal { get; set; }
-    public int? ScoreTrend { get; set; }
-    public int? ScoreEma20 { get; set; }
-    public int? ScoreEma50 { get; set; }
-    public int? ScoreRsi { get; set; }
-    public int? ScorePriceChange { get; set; }
-    public int? ScoreCandle { get; set; }
-    public int? ScoreBody { get; set; }
-    public int? ScoreAtr { get; set; }
-    public int? ScorePcr { get; set; }
-    public int? ScoreOi { get; set; }
-    public int? ScoreConfidence { get; set; }
 
     public DateTime CreatedOn { get; set; }
 }

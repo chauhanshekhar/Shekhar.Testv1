@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Trading.Domain;
 using Trading.Domain.Entities;
 
@@ -34,6 +34,7 @@ public class TradingDbContext : DbContext
     public DbSet<IndicatorSnapshot> IndicatorSnapshots => Set<IndicatorSnapshot>();
     public DbSet<TrailingStopLog> TrailingStopLogs => Set<TrailingStopLog>();
     public DbSet<StrategySetting> StrategySettings => Set<StrategySetting>();
+    public DbSet<IndicatorSnapshotOutcome> IndicatorSnapshotOutcomes => Set<IndicatorSnapshotOutcome>();
 
     protected override void OnModelCreating(ModelBuilder mb)
     {
@@ -423,14 +424,12 @@ public class TradingDbContext : DbContext
             e.Property(s => s.Ema50_5m).HasPrecision(18, 4);
 
             e.Property(s => s.Rsi).HasPrecision(18, 4);
+            e.Property(s => s.Rsi5m).HasPrecision(18, 4);
             e.Property(s => s.AtrRaw).HasPrecision(18, 4);
             e.Property(s => s.AtrPct).HasPrecision(18, 4);
             e.Property(s => s.Pcr).HasPrecision(18, 4);
             e.Property(s => s.Vwap).HasPrecision(18, 4);
 
-            e.Property(s => s.CurrentVolume).HasPrecision(18, 2);
-            e.Property(s => s.AvgVolume20).HasPrecision(18, 2);
-            e.Property(s => s.VolumeRatio).HasPrecision(18, 4);
             e.Property(s => s.PriceChangePct).HasPrecision(18, 4);
 
             e.Property(s => s.TrendDirection).HasMaxLength(20);
@@ -448,11 +447,48 @@ public class TradingDbContext : DbContext
             e.Property(s => s.BlockedOptionLtp).HasPrecision(18, 2);
             e.Property(s => s.BlockedChangeInOi).HasPrecision(18, 2);
 
-            e.Property(s => s.ScoreDirection).HasMaxLength(4);
-
             // Matches the expected read pattern: WHERE Symbol=? ORDER BY SnapshotTime
             e.HasIndex(s => new { s.Symbol, s.SnapshotTime })
              .HasDatabaseName("IX_IndicatorSnapshot_Symbol_SnapshotTime");
+        });
+
+        // ── Forward outcome of an IndicatorSnapshot (+20 / -20 INDEX points) ──────────────────
+        // Analytics only. Never read by signal generation, order placement or exit management.
+        mb.Entity<IndicatorSnapshotOutcome>(e =>
+        {
+            e.Property(o => o.Symbol).HasMaxLength(20).IsRequired();
+            e.Property(o => o.Direction).HasMaxLength(4).IsRequired();   // CALL / PUT
+
+            e.Property(o => o.EntryPrice).HasPrecision(18, 2);
+            e.Property(o => o.TargetPoints).HasPrecision(18, 2);
+            e.Property(o => o.StopLossPoints).HasPrecision(18, 2);
+
+            e.Property(o => o.FirstHitResult5Min).HasMaxLength(6);       // TARGET / SL / NONE
+            e.Property(o => o.FirstHitResult10Min).HasMaxLength(6);
+            e.Property(o => o.FirstHitResult15Min).HasMaxLength(6);
+
+            e.Property(o => o.MaxFavorableMove5).HasPrecision(18, 2);
+            e.Property(o => o.MaxAdverseMove5).HasPrecision(18, 2);
+            e.Property(o => o.MaxFavorableMove10).HasPrecision(18, 2);
+            e.Property(o => o.MaxAdverseMove10).HasPrecision(18, 2);
+            e.Property(o => o.MaxFavorableMove15).HasPrecision(18, 2);
+            e.Property(o => o.MaxAdverseMove15).HasPrecision(18, 2);
+
+            e.Property(o => o.Anomaly).HasMaxLength(200);
+
+            // One outcome per snapshot — makes re-running the backfill idempotent at the database
+            // level, not merely by convention.
+            e.HasIndex(o => o.IndicatorSnapshotId)
+             .IsUnique()
+             .HasDatabaseName("UX_IndicatorSnapshotOutcome_IndicatorSnapshotId");
+
+            // Drives the worker's "what still needs calculating" scan.
+            e.HasIndex(o => o.CompletedWindowMinutes)
+             .HasDatabaseName("IX_IndicatorSnapshotOutcome_CompletedWindowMinutes");
+
+            // Drives the analytics queries: GROUP BY Symbol, Direction.
+            e.HasIndex(o => new { o.Symbol, o.Direction })
+             .HasDatabaseName("IX_IndicatorSnapshotOutcome_Symbol_Direction");
         });
 
         mb.Entity<TrailingStopLog>(e =>

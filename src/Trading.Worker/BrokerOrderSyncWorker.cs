@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Trading.Application.Interfaces;
 using Trading.Application.Models;
 using Trading.Domain;
@@ -38,6 +38,13 @@ public class BrokerOrderSyncWorker : BackgroundService
     private static readonly TimeSpan MarketClosedInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ReconcileWindow = TimeSpan.FromHours(8);
     private const int MaxSyncAttempts = 10;
+
+    /// <summary>
+    /// How long an ENTRY order may sit unfilled at the broker before it is cancelled. Per-symbol
+    /// via StrategySettings; 0 disables the behaviour entirely.
+    /// </summary>
+    public const string UnfilledEntryTimeoutKey = "UnfilledEntryTimeoutSeconds";
+    private const int DefaultUnfilledEntryTimeoutSeconds = 60;
 
     // Statuses that mean the order is done — no need to poll again
     private static readonly HashSet<string> TerminalStatuses =
@@ -84,6 +91,7 @@ public class BrokerOrderSyncWorker : BackgroundService
         var tradeCompletion =sp.GetRequiredService<TradeCompletionService>();
         var orderService     = sp.GetRequiredService<IOrderService>();
         var uow              = sp.GetRequiredService<IUnitOfWork>();
+        var strategySettings = sp.GetRequiredService<IStrategySettingsService>();
 
         var windowStart = IstClock.Now - ReconcileWindow;
 
@@ -124,6 +132,15 @@ public class BrokerOrderSyncWorker : BackgroundService
 
             var normalized = brokerStatus.Status.ToUpperInvariant();
 
+            // Checked BEFORE the no-change short-circuit below: an entry order that is still
+            // PENDING reports the SAME status every cycle, so it would otherwise never be examined.
+            if (await TryCancelUnfilledEntryAsync(
+                    order, normalized, orderService, signalRepo, strategySettings))
+            {
+                anyChange = true;
+                continue;
+            }
+
             if (normalized == order.Status.ToUpperInvariant()) continue; // no change
 
             // Update order fields
@@ -140,6 +157,108 @@ public class BrokerOrderSyncWorker : BackgroundService
 
         if (anyChange)
             await uow.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Cancels an ENTRY order that has sat unfilled at the broker past its timeout.
+    ///
+    /// WHY THIS EXISTS. Groww orders carry validity=DAY, and nothing else in the system ever
+    /// cancels an entry. A LIMIT buy that the market runs away from therefore stays live for the
+    /// rest of the session, which costs far more than the missed trade:
+    ///   * the Signal stays ORDER_PLACED, so OnePositionGate treats it as an open position and
+    ///     suppresses EVERY new signal, on EVERY symbol, until the close;
+    ///   * if price later retraces to the limit, it FILLS — opening a position the strategy chose
+    ///     long ago, at the top of a pullback, with SL/T1/T2 derived from expired conditions.
+    /// Cancelling converts both into a clean miss.
+    ///
+    /// CONFIRM-THEN-ACT, mirroring StopLossOrderCoordinator.TryCancelAsync: a cancel racing a fill
+    /// must never leave the books saying "rejected" while a real position exists. If the cancel is
+    /// not confirmed the order is left exactly as it was and retried next cycle.
+    ///
+    /// Returns true only when the order was actually cancelled.
+    /// </summary>
+    private async Task<bool> TryCancelUnfilledEntryAsync(
+        Order order,
+        string normalizedStatus,
+        IOrderService orders,
+        IRepository<Signal> signalRepo,
+        IStrategySettingsService strategySettings)
+    {
+        if (order.OrderPurpose != Trading.Domain.OrderPurpose.Entry) return false;
+        if (!string.Equals(normalizedStatus, OrderStatus.Pending, StringComparison.OrdinalIgnoreCase)) return false;
+        if (string.IsNullOrEmpty(order.BrokerOrderId)) return false;
+
+        var signal = order.SignalId.HasValue
+            ? (await signalRepo.FindAsync(x => x.Id == order.SignalId.Value)).FirstOrDefault()
+            : null;
+
+        // Never touch an entry whose signal has already progressed — it filled and moved on.
+        if (signal != null
+            && signal.Status != SignalStatus.Pending
+            && signal.Status != SignalStatus.OrderPlaced)
+            return false;
+
+        var timeoutSeconds = strategySettings.GetInt(
+            UnfilledEntryTimeoutKey, signal?.Symbol, DefaultUnfilledEntryTimeoutSeconds);
+
+        if (timeoutSeconds <= 0) return false;                       // 0 disables the behaviour
+
+        var age = (IstClock.Now - order.OrderedAt).TotalSeconds;
+        if (age < timeoutSeconds) return false;
+
+        bool cancelled;
+        try
+        {
+            cancelled = await orders.CancelOrderAsync(order.BrokerOrderId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Cancel of unfilled entry order {OrderId} ({BrokerOrderId}) threw — will retry",
+                order.Id, order.BrokerOrderId);
+            return false;
+        }
+
+        if (!cancelled)
+        {
+            // It may have filled in the same instant. Re-read before concluding anything.
+            BrokerOrderStatus? status = null;
+            try { status = await orders.GetOrderStatusAsync(order.BrokerOrderId); }
+            catch (Exception) { /* unresolved — treated as "leave alone" below */ }
+
+            if (string.Equals(status?.Status, "COMPLETE", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogInformation(
+                    "Unfilled-entry cancel lost the race for order {OrderId} — it FILLED; normal reconciliation will take over",
+                    order.Id);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Could not confirm cancel of unfilled entry order {OrderId} (status={Status}) — retrying next cycle",
+                    order.Id, status?.Status ?? "unknown");
+            }
+
+            return false;
+        }
+
+        order.Status = OrderStatus.Cancelled;
+        order.StatusMessage = $"Unfilled after {age:F0}s — cancelled automatically";
+        order.UpdatedAt = IstClock.Now;
+
+        if (signal != null)
+        {
+            // The position was never opened, so the signal is dead. This is also what releases
+            // OnePositionGate for the rest of the day.
+            signal.Status = SignalStatus.OrderRejected;
+            signal.BrokerOrderStatus = OrderStatus.Cancelled;
+        }
+
+        _logger.LogWarning(
+            "Cancelled unfilled ENTRY order {OrderId} ({Symbol}) after {Age:F0}s at {Price} — signal {SignalId} released",
+            order.Id, order.Symbol, age, order.Price, order.SignalId);
+
+        return true;
     }
 
     /// <summary>
@@ -221,10 +340,10 @@ public class BrokerOrderSyncWorker : BackgroundService
                         signal.StopLossStatus = "";
                         break;
                     case "REJECTED":
-                        signal.StopLossStatus = "FAILED";
+                        ApplyDeadStopLoss(signal, order, "FAILED");
                         break;
                     case "CANCELLED":
-                        signal.StopLossStatus = "CANCELLED";
+                        ApplyDeadStopLoss(signal, order, "CANCELLED");
                         break;
                 }
                 return true;
@@ -306,10 +425,10 @@ public class BrokerOrderSyncWorker : BackgroundService
                     signal.StopLossStatus = "";
                     break;
                 case "REJECTED":
-                    signal.StopLossStatus = "FAILED";
+                    ApplyDeadStopLoss(signal, order, "FAILED");
                     break;
                 case "CANCELLED":
-                    signal.StopLossStatus = "CANCELLED";
+                    ApplyDeadStopLoss(signal, order, "CANCELLED");
                     break;
             }
             return;
@@ -483,5 +602,58 @@ public class BrokerOrderSyncWorker : BackgroundService
             await _alerts.SendCriticalAsync(
                 $"Broker SL_M placement FAILED for signal #{signal.Id} ({signal.Symbol}) — position is unprotected at broker level (StopLossRetryCount={signal.StopLossRetryCount}). ExitWorker will retry up to the configured cap.");
         }
+    }
+
+    /// <summary>
+    /// Records that a broker-managed SL_M is dead (rejected or cancelled) and clears the id so
+    /// ExitWorker's self-heal will place a replacement.
+    ///
+    /// Only applied when the signal is still tracking THIS order, or is tracking nothing at all.
+    /// Order rows are loaded at the top of a sync cycle and each is then polled individually, so
+    /// by the time a stale row resolves, ExitWorker may already have cancelled it and placed a
+    /// NEW SL_M. Clearing unconditionally would erase the live replacement's id and flip
+    /// StopLossStatus to FAILED/CANCELLED, which makes ExitWorker's hasNoRestingStop true and
+    /// places a SECOND resting SELL against the same position — the double fill the whole
+    /// cancel-then-place design exists to prevent.
+    /// </summary>
+    private void ApplyDeadStopLoss(Signal signal, Order order, string status)
+    {
+        if (!ShouldApplyDeadStopLoss(signal.StopLossOrderId, order.BrokerOrderId))
+        {
+            // A newer SL_M is resting — leave it alone.
+            _logger.LogInformation(
+                "BrokerOrderSync: SL_M {DeadOrderId} is {Status} for signal {Id} {Symbol}, but the signal now tracks {CurrentOrderId} — leaving the newer stop intact",
+                order.BrokerOrderId, status, signal.Id, signal.Symbol, signal.StopLossOrderId);
+            return;
+        }
+
+        signal.StopLossOrderId = "";
+        signal.StopLossStatus = status;
+
+        // A broker REJECTED (mapped to "FAILED" by the caller) is a failed placement and must
+        // count against the retry cap. StopLossOrderCoordinator.MarkPlacedAsync resets the count
+        // to 0 the moment the broker ACCEPTS the order, but a rejection arrives asynchronously
+        // here — so without this the count never leaves 0, the cap in TryPlaceAsync never
+        // engages, and a permanently un-placeable stop (e.g. inside the broker's MIS square-off
+        // window) re-places forever. "CANCELLED" is deliberately excluded: that is also the
+        // normal trailing cancel-then-place path, which must not burn the cap.
+        if (status == "FAILED")
+        {
+            signal.StopLossRetryCount++;
+        }
+    }
+
+    /// <summary>
+    /// True when a dead SL_M's terminal state may be written onto the signal: either the signal is
+    /// still tracking that exact order, or it is tracking no stop at all. False when the signal has
+    /// moved on to a DIFFERENT, live stop — writing then would erase a resting order's id.
+    /// </summary>
+    internal static bool ShouldApplyDeadStopLoss(string? signalStopLossOrderId, string? deadOrderId)
+    {
+        if (string.IsNullOrEmpty(signalStopLossOrderId))
+            return true;                                   // nothing to clobber
+
+        return !string.IsNullOrEmpty(deadOrderId)
+               && signalStopLossOrderId == deadOrderId;    // same order -> safe to clear
     }
 }

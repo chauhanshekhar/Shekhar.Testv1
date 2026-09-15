@@ -1,0 +1,16 @@
+/* RESTORE SCRIPT - regenerates the StrategySettings rows deleted on 2026-09-12.
+   Generated from the live table immediately before deletion. */
+SET QUOTED_IDENTIFIER ON;
+INSERT INTO dbo.StrategySettings (SettingKey, Symbol, SettingValue, IsActive, Description, UpdatedOn) VALUES ('DeltaMinimum', NULL, 0.350000, 1, 'Minimum ATM option delta required for entry', SYSDATETIME());
+INSERT INTO dbo.StrategySettings (SettingKey, Symbol, SettingValue, IsActive, Description, UpdatedOn) VALUES ('EnableCallStrongTrendFilter', NULL, 0.000000, 0, 'CALL requires MarketState=StrongTrend. 62.9% win rate vs 45.5% CALL baseline (18d outcome data, 6 days of StrongTrend). Set 0 to revert.', SYSDATETIME());
+INSERT INTO dbo.StrategySettings (SettingKey, Symbol, SettingValue, IsActive, Description, UpdatedOn) VALUES ('EnablePcrFilter', NULL, 1.000000, 1, 'Enable PCR filter. LIVE for PUT (pcr <= PcrBearishThreshold). For CALL see EnableCallPcrFilter.', SYSDATETIME());
+INSERT INTO dbo.StrategySettings (SettingKey, Symbol, SettingValue, IsActive, Description, UpdatedOn) VALUES ('EnableSensexDirectionalRule', 'SENSEX', 1.000000, 1, 'SENSEX_DIRECTIONAL_5M_CONFIRM_1M_ENTRY enabled', SYSDATETIME());
+INSERT INTO dbo.StrategySettings (SettingKey, Symbol, SettingValue, IsActive, Description, UpdatedOn) VALUES ('ExpiryDaySingleCutoffHour', NULL, 0.000000, 0, 'RETIRED - reverted to previous behaviour; key no longer read', SYSDATETIME());
+INSERT INTO dbo.StrategySettings (SettingKey, Symbol, SettingValue, IsActive, Description, UpdatedOn) VALUES ('FixedIndexPoints', 'SENSEX', 20.000000, 1, 'Flat +20/-20 index-point target and stop', SYSDATETIME());
+INSERT INTO dbo.StrategySettings (SettingKey, Symbol, SettingValue, IsActive, Description, UpdatedOn) VALUES ('MinSignalConfidence', NULL, 0.000000, 0, 'RETIRED - key no longer read by any code', SYSDATETIME());
+INSERT INTO dbo.StrategySettings (SettingKey, Symbol, SettingValue, IsActive, Description, UpdatedOn) VALUES ('OptionStopLossPercent', NULL, 20.000000, 0, 'RETIRED - reverted to previous behaviour; key no longer read', SYSDATETIME());
+INSERT INTO dbo.StrategySettings (SettingKey, Symbol, SettingValue, IsActive, Description, UpdatedOn) VALUES ('PcrBearishThreshold', NULL, 0.900000, 1, 'Max PCR allowed for PUT entry. Currently 0.95. History: 1.00 -> 0.73 (2026-08-18, n=6 experiment) -> 0.95. EXPERIMENTAL - re-evaluate after 10-20 more PUT trades.', SYSDATETIME());
+INSERT INTO dbo.StrategySettings (SettingKey, Symbol, SettingValue, IsActive, Description, UpdatedOn) VALUES ('PcrBullishThreshold', NULL, 1.000000, 1, 'Minimum PCR required for CALL entry', SYSDATETIME());
+INSERT INTO dbo.StrategySettings (SettingKey, Symbol, SettingValue, IsActive, Description, UpdatedOn) VALUES ('ProtectedSlBreakevenBufferPercent', NULL, 1.000000, 0, 'RETIRED - reverted to previous behaviour; key no longer read', SYSDATETIME());
+INSERT INTO dbo.StrategySettings (SettingKey, Symbol, SettingValue, IsActive, Description, UpdatedOn) VALUES ('ProtectedSlMinMovePercent', NULL, 5.000000, 0, 'RETIRED - reverted to previous behaviour; key no longer read', SYSDATETIME());
+INSERT INTO dbo.StrategySettings (SettingKey, Symbol, SettingValue, IsActive, Description, UpdatedOn) VALUES ('ProtectedSlTrailFactor', NULL, 0.250000, 0, 'RETIRED - reverted to previous behaviour; key no longer read', SYSDATETIME());

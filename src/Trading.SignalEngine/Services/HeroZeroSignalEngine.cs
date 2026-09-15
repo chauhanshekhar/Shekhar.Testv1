@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Trading.Application.Interfaces;
 using Trading.Domain;
 using Trading.Domain.Entities;
@@ -153,7 +153,7 @@ public class HeroZeroSignalEngine
             : $"{symbol}{IstClock.Now:yyMMM}{(int)hero.StrikePrice}{hero.OptionType}".ToUpper();
 
         // Index SL/T1/T2 — ATR-based via AtrRiskService, same as SignalEngineService and
-        // ExpirySignalEngine (no flag; all three engines share one unconditional path).
+        // SignalEngineService (no flag; both engines share one unconditional path).
         var risk = _atrRisk.CalculateIndexRisk(symbol, ltp, atrRaw, call, settings);
 
         var builder = new SignalBuilder(symbol);

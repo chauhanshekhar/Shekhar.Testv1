@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Options;
+﻿using Microsoft.Extensions.Options;
 using Trading.Application.Interfaces;
 using Trading.Infrastructure;
 using Trading.Infrastructure.Brokers.Groww;
@@ -57,11 +57,18 @@ internal static class BrokerExtensions
                 sp.GetRequiredService<IOptionsMonitor<GrowwSettings>>()));
         services.AddScoped<IGrowwPortfolioService>(sp =>
             new GrowwPortfolioService(sp.GetRequiredService<IGrowwHttpService>()));
+        services.AddSingleton<GrowwTokenService>();
         services.AddScoped<PaperOrderStrategy>();
         services.AddScoped<LiveOrderStrategy>(sp =>
-            new LiveOrderStrategy(sp.GetRequiredService<IGrowwHttpService>(), sp.GetRequiredService<IInstrumentCache>()));
+            new LiveOrderStrategy(
+                sp.GetRequiredService<IGrowwHttpService>(),
+                sp.GetRequiredService<IInstrumentCache>(),
+                sp.GetRequiredService<IStrategySettingsService>()));
         services.AddScoped<HeroZeroOrderStrategy>(sp =>
-            new HeroZeroOrderStrategy(sp.GetRequiredService<IGrowwHttpService>(), sp.GetRequiredService<IInstrumentCache>()));
+            new HeroZeroOrderStrategy(
+                sp.GetRequiredService<IGrowwHttpService>(),
+                sp.GetRequiredService<IInstrumentCache>(),
+                sp.GetRequiredService<IStrategySettingsService>()));
         services.AddScoped<IOrderService, OrderRouter>();
         services.AddScoped<IGrowwSmartOrderService>(sp =>
             new GrowwSmartOrderService(sp.GetRequiredService<IGrowwHttpService>()));

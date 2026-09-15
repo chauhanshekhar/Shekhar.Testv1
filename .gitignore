@@ -52,3 +52,7 @@ src/Trading.Web/src/environments/environment.local.ts
 .DS_Store
 Thumbs.db
 *.log
+
+# Backups of deploy.cmd carry the same credentials as the original.
+deploy.cmd.*
+!deploy.cmd.example
