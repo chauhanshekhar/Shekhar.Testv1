@@ -28,6 +28,31 @@ public static class GrowwInterval
     public const string OneDay = "1day";
     public const string OneWeek = "1week";
     public const string OneMonth = "1month";
+
+    /// <summary>
+    /// Minutes for the historical endpoint's <c>interval_in_minutes</c> parameter. Throws for an
+    /// interval it cannot express rather than let Groww silently fall back to 1-minute candles —
+    /// which is what happened while these strings were sent as <c>candle_interval</c> (an
+    /// unknown parameter on /v1/historical/candle/range): every "SYMBOL_5m" candle stored until
+    /// 2026-09-30 is really a 1-minute candle.
+    /// </summary>
+    public static int ToMinutes(string interval) => interval switch
+    {
+        OneMinute => 1,
+        TwoMinute => 2,
+        ThreeMinute => 3,
+        FiveMinute => 5,
+        TenMinute => 10,
+        FifteenMinute => 15,
+        ThirtyMinute => 30,
+        OneHour => 60,
+        FourHour => 240,
+        OneDay => 1440,
+        OneWeek => 10080,
+        _ when int.TryParse(interval, out var minutes) && minutes > 0 => minutes,
+        _ => throw new ArgumentOutOfRangeException(nameof(interval), interval,
+                 "No interval_in_minutes equivalent for this candle interval"),
+    };
 }
 
 public static class GrowwProduct

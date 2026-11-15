@@ -144,14 +144,14 @@ public class PaperTradingController : ControllerBase
             }
         }
 
-        // Also pull direct ticks as fallback (last 60 seconds)
-        var tickCutoff = IstClock.Now.AddSeconds(-60);
-        var ticks = await _tickRepo.FindAsync(t => t.TickTime >= tickCutoff);
-        foreach (var grp in ticks.GroupBy(t => t.Symbol))
-        {
-            var latest = grp.OrderByDescending(t => t.TickTime).First();
-            map.TryAdd(grp.Key, latest.LastPrice);
-        }
+        // Also pull direct ticks as fallback (last 60 seconds), only for the symbols
+        // GetLiveSnapshotsAsync looks up: one index seek each instead of scanning all of MarketTicks.
+        var open = await _paper.GetOpenTradesAsync();
+        var ticks = await _tickRepo.LatestPricesAsync(
+            open.SelectMany(t => new[] { t.OptionSymbol, t.Leg2OptionSymbol }),
+            IstClock.Now.AddSeconds(-60));
+        foreach (var (symbol, lastPrice) in ticks)
+            map.TryAdd(symbol, lastPrice);
 
         return map;
     }

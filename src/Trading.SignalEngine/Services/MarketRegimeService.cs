@@ -1,4 +1,4 @@
-using Trading.Domain;
+﻿using Trading.Domain;
 using Trading.Domain.Entities;
 
 namespace Trading.SignalEngine.Services;
@@ -51,7 +51,7 @@ public class MarketRegimeService
     /// <summary>Per-symbol extreme-volatility ceiling, reused by MarketClassificationService.</summary>
     public static decimal GetAtrMaxThreshold(string symbol) => AtrMaxThreshold.GetValueOrDefault(symbol, 20m);
 
-    /// <summary>Per-symbol "High" volatility floor, reused by ExpiryMarketScoreService's ATR band scoring.</summary>
+    /// <summary>Per-symbol "High" volatility floor.</summary>
     public static decimal GetAtrThreshold(string symbol) => AtrThreshold.GetValueOrDefault(symbol, 5m);
 
     private readonly AtrService _atr;
@@ -62,14 +62,44 @@ public class MarketRegimeService
         _atr = atr;
     }
 
+    /// <param name="candles">
+    /// ROLLING indicator candles (history included), not today-only. Previously the caller passed
+    /// today's candles alone, so before the 20th bar of the session -- roughly 09:35 -- this method
+    /// short-circuited and asserted Sideways/LOW. MarketRegimeGate treats Low volatility as a hard
+    /// block, so every signal was suppressed for the first ~20 minutes of the signal window no
+    /// matter what the market was doing, including on a large opening gap. Rolling history is the
+    /// same source EMA20/EMA50 already use, and AtrService applies Wilder smoothing forward to the
+    /// most recent bar, so ATR stays seeded from yesterday and converges as today's bars arrive.
+    /// </param>
+    /// <param name="dayOpen">
+    /// Today's opening price, used only for gap detection. Passed explicitly because `candles` is
+    /// now rolling, so its First() is no longer today's first bar.
+    /// </param>
     public MarketRegime Classify(
         string symbol,
         List<Candle> candles,
         decimal ema20,
         decimal ema50,
         decimal yesterdayClose = 0m,
-        bool isExpiryDay = false)
+        bool isExpiryDay = false,
+        decimal dayOpen = 0m)
     {
+        // Gap direction is resolved FIRST: it needs only today's open and yesterday's close, never
+        // 20 bars. Computing it after the warmup guard (as before) meant the flags read false/false
+        // during exactly the window a gap matters.
+        bool isGapUp = false;
+        bool isGapDown = false;
+
+        if (yesterdayClose > 0 && dayOpen > 0)
+        {
+            var openGapPct = (dayOpen - yesterdayClose) / yesterdayClose * 100m;
+            isGapUp = openGapPct > GapPercent;
+            isGapDown = openGapPct < -GapPercent;
+        }
+
+        // Genuine no-data safety net only. With rolling candles this is now reached solely when
+        // history really is absent (first run, newly added symbol) -- not every morning. Gap flags
+        // are carried through so callers still see the opening context.
         if (candles == null ||
             candles.Count < 20)
         {
@@ -77,8 +107,8 @@ public class MarketRegimeService
                 MarketTrend.Sideways,
                 MarketVolatility.Low,
                 isExpiryDay,
-                false,
-                false,
+                isGapUp,
+                isGapDown,
                 0m);
         }
 
@@ -111,6 +141,7 @@ public class MarketRegimeService
 
         const decimal BufferPercent = 0.0002m; // 0.02%
 
+
         var emaBuffer = ema50 * BufferPercent;
 
         if (ema20 > ema50 + emaBuffer &&
@@ -127,28 +158,6 @@ public class MarketRegimeService
         {
             trend = MarketTrend.Sideways;
         }
-        bool isGapUp = false;
-        bool isGapDown = false;
-
-        if (yesterdayClose > 0)
-        {
-            var todayOpen =
-                orderedCandles
-                .First()
-                .Open;
-
-            var gapPct =
-                ((todayOpen - yesterdayClose)
-                / yesterdayClose)
-                * 100m;
-
-            isGapUp =
-                gapPct > GapPercent;
-
-            isGapDown =
-                gapPct < -GapPercent;
-        }
-
         return new MarketRegime(
             trend,
             volatility,
@@ -162,26 +171,33 @@ public class MarketRegimeService
     /// Final trade filter.
     /// Reject:
     /// - Low volatility
-    /// - Sideways trend
-    /// - Expiry day
+    /// - Extreme volatility
+    /// - Expiry day before 09:30
+    ///
+    /// Sideways is deliberately NOT rejected here. This method is reached only from
+    /// MarketRegimeGate, a pre-gate that runs before StrategyManager picks a strategy, so any
+    /// rule added here is unavoidably global and would also suppress HeroZero and Expiry, which
+    /// carry their own independent entry rules. The Sideways restriction is therefore enforced
+    /// one layer later, in StrategySelectorService, where the selected strategy is known and it
+    /// can be applied to Directional alone.
     /// </summary>
-    public static bool IsTradeAllowed(
-        MarketRegime regime)
+
+    public static bool IsTradeAllowed(MarketRegime regime)
     {
-
-        if (regime.Volatility == MarketVolatility.Low ||
-            regime.Volatility == MarketVolatility.Extreme)
-        {
+        // Global dead-market protection
+        if (regime.Volatility == MarketVolatility.Low)
             return false;
-        }
-        
 
+        // Expiry-day opening protection
         if (regime.IsExpiryDay &&
-        IstClock.Now.TimeOfDay < new TimeSpan(9, 30, 0))
+            IstClock.Now.TimeOfDay < new TimeSpan(9, 30, 0))
         {
             return false;
         }
 
+        // High and Extreme volatility are evaluated
+        // by strategy-specific entry and risk filters.
         return true;
     }
+
 }

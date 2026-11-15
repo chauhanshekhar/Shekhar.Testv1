@@ -25,6 +25,67 @@ public class StrategySelectorService
 
     public async Task<StrategyDecision> Select(StrategyContext ctx)
     {
+        var decision = await SelectCore(ctx);
+
+        // ── Sideways regime: Directional only ────────────────────────────────────────────────
+        // Applied here, not in MarketRegimeService.IsTradeAllowed, because that method is reached
+        // from MarketRegimeGate — a pre-gate that runs BEFORE this selection, where the strategy
+        // is still unknown. A rule there is unavoidably global and would also suppress HeroZero
+        // and Expiry, both of which carry their own independent entry rules (HeroZero: CE/PE
+        // scoring + ranking + score >= 70 + premium bands; Expiry: MarketScore gate + mode
+        // windows). By the time we are here the strategy is decided, so the restriction lands on
+        // Directional alone.
+        //
+        // Motivating incident (2026-08-18): five SENSEX signals fired at MarketRegime=Sideways/High
+        // and every one hit its stop-loss. Their MarketState was Scalping (3) and Breakdown (2) —
+        // note both route to Directional below, since Scalping has no engine of its own — so all
+        // five are covered by this single check. Every signal from the profitable era was
+        // Uptrend or Downtrend, never Sideways.
+        //
+        // Expiry days are exempt, matching SignalWorker, which already skips MarketRegimeGate then.
+
+        // Sideways protection for Directional strategy.
+        // Confirmed breakout/breakdown gets a separate evaluation path.
+        var regime = ctx.Regime;
+
+        if (!ctx.IsExpiryDay
+            && decision.Strategy == SelectedStrategy.Directional
+            && regime?.Trend == MarketTrend.Sideways)
+        {
+            bool isDirectionalBreakout =
+                decision.MarketState == MarketState.Breakout ||
+                decision.MarketState == MarketState.Breakdown;
+
+            if (!isDirectionalBreakout)
+            {
+                return new StrategyDecision
+                {
+                    Strategy = SelectedStrategy.None,
+                    Priority = 0,
+                    MarketState = decision.MarketState,
+                    Reason = $"{ctx.MarketStateReason} — Directional suppressed: " +
+                             $"Sideways/{regime.Volatility}"
+                };
+            }
+
+            if (regime.Volatility == MarketVolatility.Extreme)
+            {
+                return new StrategyDecision
+                {
+                    Strategy = SelectedStrategy.None,
+                    Priority = 0,
+                    MarketState = decision.MarketState,
+                    Reason = $"{ctx.MarketStateReason} — Sideways/Extreme requires validation"
+                };
+            }
+        }
+
+
+        return decision;
+    }
+
+    private async Task<StrategyDecision> SelectCore(StrategyContext ctx)
+    {
         // Defensive first check — kept even though News below is now MarketClassificationService's
         // job too, per "never remove safety checks".
         if (ctx.IsHighImpactEvent)
@@ -71,15 +132,19 @@ public class StrategySelectorService
                 };
             }
 
-            // Reuses ExpiryGammaBlastStartTime (the same 14:00 boundary ExpirySignalEngine's own
-            // GammaBlast mode switches on) rather than a second, separately-tuned cutoff.
+            // Expiry days route to the two live engines — there is no dedicated Expiry engine.
+            // ExpiryGammaBlastStartTime is the Directional -> HeroZero handover: the late session
+            // is where cheap far-OTM premium behaves like HeroZero's own setup.
             var beforeCutoff = now < settings.ExpiryGammaBlastStartTime;
+            var window = beforeCutoff
+                ? $"{settings.ExpiryMorningNoTradeEnd:hh\\:mm}-{settings.ExpiryGammaBlastStartTime:hh\\:mm}"
+                : $"at/after {settings.ExpiryGammaBlastStartTime:hh\\:mm}";
             return new StrategyDecision
             {
                 Strategy = beforeCutoff ? SelectedStrategy.Directional : SelectedStrategy.HeroZero,
                 Priority = 2,
                 MarketState = ctx.MarketState,
-                Reason = $"{ctx.MarketStateReason} [Expiry] — {(beforeCutoff ? "09:45-14:00" : "at/after 14:00")} IST"
+                Reason = $"{ctx.MarketStateReason} [Expiry] — {window} IST"
             };
         }
 

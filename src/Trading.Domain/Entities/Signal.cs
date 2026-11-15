@@ -66,8 +66,10 @@ public class Signal
     public string? ExitReason { get; set; }
 
     // Market context at entry — copied to TradeJournal on exit
-    public decimal RsiAtEntry        { get; set; }
+    public decimal RsiAtEntry        { get; set; }   // entry-check RSI: 5-minute RSI from 2026-09-30 (1-minute on older rows); 1m fallback when no 5m RSI exists
+    public decimal? Rsi5mAtEntry     { get; set; }   // 5-minute RSI(14) — the value the Call/PutRsiFloor..Ceiling band is checked against
     public decimal PcrAtEntry        { get; set; }
+    public decimal? PcrFullChainAtEntry { get; set; }  // full-chain PCR at entry; NULL when the PCR_FULL_CHAIN indicator was stale (>2 min) or row predates this column
     public decimal DeltaAtEntry      { get; set; }
     public decimal ChangeInOiAtEntry { get; set; }
     public decimal AtrPctAtEntry     { get; set; }
@@ -87,6 +89,6 @@ public class Signal
     public string StopLossOrderId { get; set; } = "";        // BrokerOrderId of the resting SL_M sell
     public decimal StopLossTriggerPrice { get; set; }         // trigger price currently resting on the broker
     public string StopLossStatus { get; set; } = "";          // "" / PLACED / CANCELLED / FAILED
-    public DateTime? LastSlUpdateTime { get; set; }           // last placement attempt (success or fail)
+    public DateTime? LastSlUpdateTime { get; set; }           // when a stop was last actually RESTING at the broker (success only, never on a failed attempt) -- ExitWorker's MARKET fallback times unprotected duration from this
     public int StopLossRetryCount { get; set; }                // consecutive failed placement attempts; reset to 0 on success. Persisted so a restart doesn't forget and re-hammer the broker.
 }

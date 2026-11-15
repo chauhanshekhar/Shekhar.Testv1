@@ -7,7 +7,10 @@ namespace Trading.Infrastructure.Brokers.Groww;
 
 // Fetches OHLCV candles from Groww historical data endpoint.
 // GET /v1/historical/candle/range?exchange=NSE&segment=FNO&trading_symbol=NIFTY2661626100CE
-//     &start_time=2025-09-24 10:56:00&end_time=2025-09-24 15:21:00&candle_interval=10
+//     &start_time=2025-09-24 10:56:00&end_time=2025-09-24 15:21:00&interval_in_minutes=10
+// The interval parameter of THIS endpoint is interval_in_minutes (an integer). candle_interval
+// (e.g. "5minute") belongs to the newer /v1/historical/candles backtesting endpoint; sent here it
+// is ignored and Groww returns its default 1-minute candles.
 public class GrowwHistoricalDataService : IHistoricalDataService
 {
     private readonly IGrowwHttpService _growwHttp;
@@ -19,7 +22,7 @@ public class GrowwHistoricalDataService : IHistoricalDataService
 
     // exchange  — NSE / BSE
     // token     — base trading symbol (e.g. WIPRO, NIFTY24DEC24000CE)
-    // interval  — use GrowwInterval constants (1minute, 5minute, 15minute, …)
+    // interval  — a GrowwInterval constant (converted with GrowwInterval.ToMinutes)
     // from/to   — datetime range
     public async Task<List<Candle>> GetCandlesAsync(
         string exchange,
@@ -30,6 +33,7 @@ public class GrowwHistoricalDataService : IHistoricalDataService
         string segment = GrowwSegment.Cash)
     {
         var symbol = token;
+        var minutes = GrowwInterval.ToMinutes(interval);
         var startTime = from.ToString("yyyy-MM-dd HH:mm:ss");
         var endTime = to.ToString("yyyy-MM-dd HH:mm:ss");
         var url = GrowwEndpoint.HistoricalCandles +
@@ -38,7 +42,7 @@ public class GrowwHistoricalDataService : IHistoricalDataService
                   $"&trading_symbol={Uri.EscapeDataString(symbol)}" +
                   $"&start_time={Uri.EscapeDataString(startTime)}" +
                   $"&end_time={Uri.EscapeDataString(endTime)}" +
-                  $"&candle_interval={Uri.EscapeDataString(interval)}";
+                  $"&interval_in_minutes={minutes}";
 
         var result = await _growwHttp.GetAsync<JsonElement>(url);
         if (!result.IsSuccess)
@@ -49,6 +53,16 @@ public class GrowwHistoricalDataService : IHistoricalDataService
 
         if (!doc.TryGetProperty("payload", out var payloadEl))
             return [];
+
+        // Groww echoes the interval it actually served. If it is not the one asked for, refuse the
+        // data rather than store e.g. 1-minute bars under SYMBOL_5m.
+        if (payloadEl.TryGetProperty("interval_in_minutes", out var servedEl)
+            && servedEl.ValueKind == JsonValueKind.Number
+            && servedEl.GetInt32() != minutes)
+        {
+            throw new InvalidOperationException(
+                $"Groww returned {servedEl.GetInt32()}-minute candles for {token}, requested {minutes} — not storing them");
+        }
 
         if (!payloadEl.TryGetProperty("candles", out var candlesEl))
             return [];

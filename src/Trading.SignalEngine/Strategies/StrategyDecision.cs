@@ -1,4 +1,4 @@
-using Trading.SignalEngine.Services;
+﻿using Trading.SignalEngine.Services;
 
 namespace Trading.SignalEngine.Strategies;
 
@@ -6,8 +6,7 @@ public enum SelectedStrategy
 {
     None,
     Directional,
-    HeroZero,
-    Expiry
+    HeroZero
 }
 
 public class StrategyDecision

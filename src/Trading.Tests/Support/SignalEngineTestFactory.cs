@@ -24,7 +24,7 @@ public static class SignalEngineTestFactory
             settings,
             new AtrRiskService(),
             new OiAnalysisService(),
-            null!, // IRepository<OptionChainData> — unused by GenerateSignalDetailed/GenerateScored
+            null!, // IRepository<OptionChainData> — unused by GenerateSignalDetailed
             NullLogger<SignalEngineService>.Instance);
     }
 

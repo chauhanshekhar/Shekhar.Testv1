@@ -1,4 +1,4 @@
-using Trading.Application.Interfaces;
+﻿using Trading.Application.Interfaces;
 using Trading.Domain;
 using Trading.Domain.Entities;
 using Trading.Infrastructure;
@@ -31,6 +31,13 @@ public class BrokerPositionSyncWorker : BackgroundService
 
     // Only reconcile signals created in this window — avoids scanning full history
     private static readonly TimeSpan ReconcileWindow = TimeSpan.FromHours(8);
+
+    /// <summary>
+    /// How long a PENDING signal is left alone before its absence from the broker's position list
+    /// is treated as evidence the order never reached the exchange. Must comfortably exceed a slow
+    /// PlaceOrderAsync round-trip plus the lag before a fill appears in GetPositionsAsync.
+    /// </summary>
+    private static readonly TimeSpan PendingRejectGrace = TimeSpan.FromMinutes(5);
 
     public BrokerPositionSyncWorker(
         ILogger<BrokerPositionSyncWorker> logger,
@@ -94,6 +101,9 @@ public class BrokerPositionSyncWorker : BackgroundService
      s.Status == SignalStatus.ExitPending ||
      s.Status == SignalStatus.PartialExitPending
  ));
+        // Paper signals (incl. Scalping-state ones in Live mode) never exist at the broker: reconciling
+        // them would reject pending ones and raise "no broker position" alerts.
+        dbSignals = dbSignals.Where(s => !orders.IsPaperSignal(s)).ToList();
         if (dbSignals.Count == 0) return;
 
         // Fetch live broker positions
@@ -113,6 +123,16 @@ public class BrokerPositionSyncWorker : BackgroundService
 
         bool anyChange = false;
 
+        // Entry orders for every candidate signal, in one query — used only to decide whether
+        // BrokerOrderSyncWorker can still resolve an order's fate.
+        var candidateIds = dbSignals.Select(x => x.Id).ToList();
+        var entryOrdersBySignal = (await orderRepo.FindAsync(
+                o => o.SignalId.HasValue
+                     && candidateIds.Contains(o.SignalId.Value)
+                     && o.OrderPurpose == Trading.Domain.OrderPurpose.Entry))
+            .GroupBy(o => o.SignalId!.Value)
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<Order>)g.ToList());
+
         foreach (var signal in dbSignals)
         {
             var hasBrokerPosition = !string.IsNullOrEmpty(signal.OptionSymbol)
@@ -121,10 +141,36 @@ public class BrokerPositionSyncWorker : BackgroundService
             if (signal.Status == SignalStatus.Pending)
             {
                 // PENDING + no broker position = order never sent (crash between save and PlaceOrderAsync)
-                if (!hasBrokerPosition)
+                //
+                // GUARDED. GetPositionsAsync lags a fill by seconds, and a slow PlaceOrderAsync
+                // round-trip can leave a signal PENDING for far longer than this worker's 30s
+                // cycle. Declaring rejection on that evidence alone marked a LIVE filled position
+                // as ORDER_REJECTED, which removed it from ExitDataLoader's open-signal query
+                // (OrderPlaced/Active/PartialExitPending only) — so no stop was ever placed or
+                // retried and the position had to be closed by hand.
+                //
+                // BrokerOrderSyncWorker is the source of truth for order fate; this worker must
+                // not pre-empt it while reconciliation is still possible.
+                entryOrdersBySignal.TryGetValue(signal.Id, out var entryOrders);
+
+                var canReject = CanDeclarePendingRejected(
+                    signal.CreatedOn, signal.BrokerOrderId, entryOrders, IstClock.Now,
+                    PendingRejectGrace, out var rejectReason);
+
+                if (!hasBrokerPosition && canReject)
                 {
+                    _logger.LogWarning(
+                        "BrokerPositionSync: signal {Id} {Symbol} declared ORDER_REJECTED — {Reason}",
+                        signal.Id, signal.Symbol, rejectReason);
+
                     signal.Status = SignalStatus.OrderRejected;
                     anyChange = true;
+                }
+                else if (!hasBrokerPosition)
+                {
+                    _logger.LogInformation(
+                        "BrokerPositionSync: signal {Id} {Symbol} still PENDING with no broker position — not rejecting ({Reason})",
+                        signal.Id, signal.Symbol, rejectReason);
                 }
             }
             else if (signal.Status == SignalStatus.OrderPlaced)
@@ -305,7 +351,8 @@ public class BrokerPositionSyncWorker : BackgroundService
               && s.OptionSL > 0
               && s.StopLossOrderId == "");
 
-        foreach (var signal in unprotected.Where(s => TradingConst.IsSingleLegStrategy(s.StrategyType)))
+        foreach (var signal in unprotected.Where(s => TradingConst.IsSingleLegStrategy(s.StrategyType)
+                                                       && !orders.IsPaperSignal(s)))
         {
             _logger.LogWarning(
                 "Recovering missing SL_M for signal {Id} {Symbol} (StopLossStatus={Status}, RetryCount={Retries}) — likely a restart/crash gap",
@@ -320,5 +367,55 @@ public class BrokerPositionSyncWorker : BackgroundService
             }
         }
     }
-}
 
+    /// <summary>
+    /// True only when a PENDING signal's entry order can safely be declared never-placed.
+    ///
+    /// Refuses while any of these hold, because each means the order may be live at the broker:
+    ///   * the signal is younger than the grace period (placement may still be in flight);
+    ///   * the signal already carries a BrokerOrderId (the broker accepted it);
+    ///   * an entry Order row carries a BrokerOrderId, or sits in a non-terminal state that
+    ///     BrokerOrderSyncWorker is still reconciling (PENDING / ORDER_UNKNOWN).
+    /// </summary>
+    internal static bool CanDeclarePendingRejected(
+        DateTime createdOn,
+        string? signalBrokerOrderId,
+        IReadOnlyList<Order>? entryOrders,
+        DateTime now,
+        TimeSpan grace,
+        out string reason)
+    {
+        if (now - createdOn < grace)
+        {
+            reason = $"only {(now - createdOn).TotalSeconds:F0}s old, inside the {grace.TotalMinutes:F0}m placement grace";
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(signalBrokerOrderId))
+        {
+            reason = $"signal already carries BrokerOrderId {signalBrokerOrderId}";
+            return false;
+        }
+
+        if (entryOrders != null)
+        {
+            foreach (var o in entryOrders)
+            {
+                if (!string.IsNullOrEmpty(o.BrokerOrderId))
+                {
+                    reason = $"entry order {o.Id} carries BrokerOrderId {o.BrokerOrderId}";
+                    return false;
+                }
+
+                if (o.Status == OrderStatus.Pending || o.Status == OrderStatus.OrderUnknown)
+                {
+                    reason = $"entry order {o.Id} is {o.Status} — BrokerOrderSyncWorker still reconciling";
+                    return false;
+                }
+            }
+        }
+
+        reason = "past grace, no broker order id, no reconcilable entry order";
+        return true;
+    }
+}

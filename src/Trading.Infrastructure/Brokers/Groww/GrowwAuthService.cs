@@ -1,4 +1,4 @@
-using Trading.Domain;
+﻿using Trading.Domain;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Trading.Application.Interfaces;
@@ -13,6 +13,9 @@ namespace Trading.Infrastructure.Brokers.Groww;
 public class GrowwAuthService : IGrowwAuthService
 {
     private const string TokenKey = "GrowwAccessToken";
+    private const string ApiKeyKey = "GrowwApiKey";
+    private const string TotpSecretKey = "GrowwTotpSecret";
+    private const string ApiSecretKey = "GrowwApiSecret";
     private const string ModeKey  = "TradingMode";
     private static readonly TimeZoneInfo Ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
 
@@ -55,6 +58,36 @@ public class GrowwAuthService : IGrowwAuthService
 
         return _cachedToken;
     }
+
+    /// <summary>
+    /// Credential lookup: SystemSettings row first, then appsettings/environment.
+    ///
+    /// Deliberately NOT cached. It is read only when a token is actually being generated — once a
+    /// day plus retries, at most ~25 reads in 24 hours — so a per-call query costs nothing and
+    /// guarantees a rotated credential takes effect immediately instead of after a restart.
+    /// </summary>
+    private string GetSetting(string key, string fallback)
+    {
+        try
+        {
+            using var db = _dbFactory.CreateDbContext();
+            var value = db.SystemSettings.AsNoTracking()
+                          .FirstOrDefault(s => s.Key == key)?.Value;
+
+            return !string.IsNullOrWhiteSpace(value) ? value : fallback;
+        }
+        catch
+        {
+            // A database problem must not make the configured fallback unreachable.
+            return fallback;
+        }
+    }
+
+    public string GetApiKey() => GetSetting(ApiKeyKey, _options.CurrentValue.ApiKey);
+
+    public string GetTotpSecret() => GetSetting(TotpSecretKey, _options.CurrentValue.TotpSecret);
+
+    public string GetApiSecret() => GetSetting(ApiSecretKey, _options.CurrentValue.ApiSecret);
 
     public async Task UpdateAccessTokenAsync(string token, CancellationToken ct = default)
     {

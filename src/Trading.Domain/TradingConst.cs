@@ -54,6 +54,7 @@ public static class TradingConst
         public const string Ema50  = "EMA50";
         public const string Rsi    = "RSI";
         public const string Atr    = "ATR";
+        public const string PcrFullChain = "PCR_FULL_CHAIN";
     }
 
     public static class TradeStatus
@@ -67,10 +68,22 @@ public static class TradingConst
     public static class ExitReason
     {
         public const string OptionSlHit   = "OPTION_SL_HIT";
+        // OptionSL trailed ABOVE the entry premium: the exit locked a profit, it was not a loss-making stop-out.
+        public const string TrailingSlHit = "TRAILING_SL_HIT";
         public const string OptionT2Hit   = "OPTION_T2_HIT";
         public const string OptionT1Hit   = "PARTIAL_T1";
+        public const string PartialT2     = "PARTIAL_T2";      // EnableT2Partial: T2 partial sale (runner keeps trailing)
+        public const string PartialT3     = "PARTIAL_T3";      // target ladder: middle-target partial sale
+        public const string OptionT5Hit   = "OPTION_T5_HIT";   // target ladder: final target, full exit
         public const string IndexSlHit    = "INDEX_SL_HIT";
         public const string ForceExitEod  = "FORCE_EXIT_EOD";
         public const string HeroZero      = "HERO_ZERO";
+
+        /// <summary>
+        /// Label for an exit at the option stop: <see cref="TrailingSlHit"/> when the stop had been trailed above the entry
+        /// premium (the trade exits in profit), otherwise <see cref="OptionSlHit"/>. Label only - the exit itself is unchanged.
+        /// </summary>
+        public static string ForOptionStop(decimal optionSl, decimal entryPremium)
+            => entryPremium > 0 && optionSl > entryPremium ? TrailingSlHit : OptionSlHit;
     }
 }

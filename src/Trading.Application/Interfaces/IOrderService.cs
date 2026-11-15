@@ -6,6 +6,14 @@ namespace Trading.Application.Interfaces;
 public interface IOrderService
 {
     TradingMode CurrentMode { get; }
+
+    /// <summary>
+    /// True when this signal is executed as a paper trade (no broker orders). Defaults to the global
+    /// mode; <c>OrderRouter</c> also treats Scalping-state signals as paper in Live/HeroZero mode.
+    /// Callers must use this, not <see cref="CurrentMode"/>, to decide whether to place broker stops
+    /// or expect broker fills for a signal.
+    /// </summary>
+    bool IsPaperSignal(Signal signal) => CurrentMode == TradingMode.Paper;
     /// <summary>
     /// Places the entry order for a signal. signal.OrderReferenceId must already be set
     /// (by the caller, before the Order row is inserted) — it's sent to Groww as-is so a

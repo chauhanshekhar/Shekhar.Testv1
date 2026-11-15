@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Trading.Application.Interfaces;
 using Trading.Domain;
 using Trading.Domain.Entities;
@@ -29,7 +29,7 @@ public class HeroZeroSignalEngine
 
     private static readonly TimeSpan NormalDayStart = new(9, 30, 0);
     private static readonly TimeSpan ExpiryGammaModeStart = new(11, 0, 0);
-    private static readonly TimeSpan ExpiryLotteryModeStart = new(14, 30, 0);
+    private static readonly TimeSpan ExpiryLotteryModeStart = new(13, 30, 0);
 
     private const decimal LotteryMinPremium = 5m;
     private const decimal LotteryMaxPremium = 20m;
@@ -97,7 +97,7 @@ public class HeroZeroSignalEngine
             }
             else if (now >= ExpiryLotteryModeStart)
             {
-                // After 14:30 — lottery mode: wider premium band, higher bar.
+                // From 13:30 — lottery mode: narrower premium band, higher bar.
                 minPremium = LotteryMinPremium;
                 maxPremium = LotteryMaxPremium;
                 minScore = LotteryMinScore;
@@ -105,7 +105,7 @@ public class HeroZeroSignalEngine
             }
             else
             {
-                // 11:00–14:30 — Gamma Mode: full chain, standard bar.
+                // 11:00–13:30 — Gamma Mode: full chain, standard bar.
                 universe = chain;
             }
         }
@@ -153,7 +153,7 @@ public class HeroZeroSignalEngine
             : $"{symbol}{IstClock.Now:yyMMM}{(int)hero.StrikePrice}{hero.OptionType}".ToUpper();
 
         // Index SL/T1/T2 — ATR-based via AtrRiskService, same as SignalEngineService and
-        // ExpirySignalEngine (no flag; all three engines share one unconditional path).
+        // SignalEngineService (no flag; both engines share one unconditional path).
         var risk = _atrRisk.CalculateIndexRisk(symbol, ltp, atrRaw, call, settings);
 
         var builder = new SignalBuilder(symbol);

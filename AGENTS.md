@@ -12,6 +12,38 @@ Never allow unrelated agents to modify unrelated code.
 
 ---
 
+# CLAUDE CODE MAPPING
+
+Each role below is backed by files under `.claude/`. The role text in this file is the summary;
+the skill is the detailed playbook, and the rules apply to every role.
+
+Rules (always loaded): `.claude/rules/00-project-map.md`, `01-trading-safety.md`,
+`02-approval-gate.md`, `03-database.md`, `04-existing-code-first.md`.
+
+| Role | Skill(s) — `.claude/skills/<name>/SKILL.md` | Command |
+|---|---|---|
+| AI Chief Architect | `trading-ai-director`, `data-flow-architecture`, `worker-architecture` | — |
+| Quant Research Engineer | `strategy-research`, `analyze-signals`, `propose-condition` | `/analyze-signals`, `/propose-condition` |
+| Market Analyst | `market-regime-analyzer`, `live-market-intelligence` | — |
+| Backtest Engine | `backtest-engine`, `backtest-be` | `/backtest-be` |
+| Parameter Optimizer | `parameter-optimizer` | — |
+| Strategy Ranking Engine | `strategy-ranking` | — |
+| Signal Engine Engineer | `signal-engine-architecture`, `new-condition` | `/new-condition` |
+| Exit Flow Engineer | `exit-engine-architecture` | — |
+| Groww API Engineer | `order-execution-engine` | — |
+| Database Engineer | rule `03-database.md` | — |
+| Code Review / Security Engineer | rules `01-trading-safety.md`, `04-existing-code-first.md` | — |
+| Deployment Engineer | rule `02-approval-gate.md` | — |
+| Daily / Weekly / Monthly Research | `performance-analytics`, `trade-journal-analyzer`, `self-learning-engine`, `strategy-research` | `/analyze-signals` |
+
+Cross-cutting skills used by several roles: `ai-decision-engine` (final combined
+recommendation), `risk-management`, `portfolio-allocation`, `knowledge-base`.
+
+Performance Engineer, Log Analyzer and Production Monitor have no dedicated skill yet — follow
+their sections below plus the rules.
+
+---
+
 # AI CHIEF ARCHITECT
 
 Responsibilities
@@ -252,6 +284,8 @@ SignalEngine
 
 StrategySelector
 
+Signal Gates (Trading.Worker/SignalGates — IPreSignalGate / IPostSignalGate, registered in SignalWorker)
+
 EMA
 
 ATR
@@ -373,6 +407,12 @@ Never delete production data.
 Always generate migration.
 
 Always generate rollback.
+
+Strategy thresholds and Enable flags live in StrategySettings (SettingKey / Symbol / SettingValue).
+
+SystemSettings (Key / Value) is runtime state and credentials only — never SELECT * it.
+
+Never execute data changes — write them as scripts in docs/ for the user to run.
 
 ---
 
@@ -574,7 +614,7 @@ Losing Conditions
 
 Generate
 
-DailyResearchReport.md
+docs/research/<yyyy-mm-dd>-daily/DailyResearchReport.md
 
 Include
 
@@ -610,7 +650,7 @@ Parameter Stability
 
 Generate
 
-WeeklyStrategyReview.md
+docs/research/<yyyy-mm-dd>-weekly/WeeklyStrategyReview.md
 
 Recommend
 
@@ -642,7 +682,7 @@ Time-of-Day Behaviour
 
 Generate
 
-MonthlyOptimization.md
+docs/research/<yyyy-mm-dd>-monthly/MonthlyOptimization.md
 
 Never overfit.
 
@@ -650,11 +690,15 @@ Never overfit.
 
 # BUILD POLICY
 
-No automated tests exist.
+Automated tests exist in src/Trading.Tests (xUnit).
+
+New behaviour gets a focused test there. Never weaken a test to make it pass.
 
 Validation means
 
-Solution builds
+Solution builds (dotnet build TradingPlatform.slnx)
+
+Tests pass (dotnet test src/Trading.Tests)
 
 Docker builds
 

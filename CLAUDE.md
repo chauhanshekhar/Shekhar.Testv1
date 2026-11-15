@@ -45,7 +45,7 @@ Backend
 
 Frontend
 
-- Angular 21
+- Angular (Trading.Web) — not in this repository; version unverified. Do not assume its code exists.
 
 Infrastructure
 
@@ -74,7 +74,11 @@ Trading.SignalEngine
 
 Trading.Worker
 
-Trading.Web
+Trading.Tests (xUnit)
+
+Trading.Web — Angular UI, not present in this checkout (.claude/launch.json still points to src/Trading.Web)
+
+See .claude/rules/00-project-map.md for what each project owns.
 
 ---
 
@@ -166,7 +170,9 @@ dotnet restore
 
 dotnet build
 
-Fix all compile errors.
+dotnet test src/Trading.Tests
+
+Fix all compile errors and test failures. Never weaken a test to make it pass.
 
 Never assume the solution builds.
 
@@ -177,6 +183,8 @@ Never assume the solution builds.
 Validation means
 
 Solution builds
+
+Tests pass (dotnet test src/Trading.Tests)
 
 Docker builds
 

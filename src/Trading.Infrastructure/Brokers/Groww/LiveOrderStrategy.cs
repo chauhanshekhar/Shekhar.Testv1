@@ -1,4 +1,4 @@
-using Trading.Application.Interfaces;
+﻿using Trading.Application.Interfaces;
 using Trading.Application.Models;
 using Trading.Domain.Entities;
 
@@ -10,13 +10,25 @@ namespace Trading.Infrastructure.Brokers.Groww;
 /// </summary>
 public class LiveOrderStrategy : IOrderStrategy
 {
+    /// <summary>
+    /// Per-symbol StrategySettings flag. False (default) keeps the historical LIMIT-at-quote
+    /// entry; true sends the entry as MARKET so it cannot be missed when the premium moves
+    /// between signal creation and the order reaching the exchange.
+    /// </summary>
+    public const string UseMarketEntryOrdersKey = "UseMarketEntryOrders";
+
     private readonly IGrowwHttpService _growwHttp;
     private readonly IInstrumentCache _instruments;
+    private readonly IStrategySettingsService _strategySettings;
 
-    public LiveOrderStrategy(IGrowwHttpService growwHttp, IInstrumentCache instruments)
+    public LiveOrderStrategy(
+        IGrowwHttpService growwHttp,
+        IInstrumentCache instruments,
+        IStrategySettingsService strategySettings)
     {
         _growwHttp = growwHttp;
         _instruments = instruments;
+        _strategySettings = strategySettings;
     }
 
     // ── Template Method — override in HeroZeroOrderStrategy ──────────────────
@@ -33,7 +45,11 @@ public class LiveOrderStrategy : IOrderStrategy
         var signalId = signal.Id.ToString();
 
         // Leg 1 (always a buy for CE/PE ATM option)
-        var req1 = new PlaceOrderRequestBuilder().FromSignalEntry(signal, contracts, orderReferenceId).Build();
+        var useMarketEntry = _strategySettings.GetBool(UseMarketEntryOrdersKey, signal.Symbol, false);
+
+        var req1 = new PlaceOrderRequestBuilder()
+            .FromSignalEntry(signal, contracts, orderReferenceId, useMarketEntry)
+            .Build();
         var result1 = await _growwHttp.PostAsync<GrowwResponse<PlaceOrderResponse>>(
             GrowwEndpoint.OrderCreate, req1, signalId, orderReferenceId);
 
