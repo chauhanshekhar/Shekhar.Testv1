@@ -56,3 +56,4 @@ Thumbs.db
 # Backups of deploy.cmd carry the same credentials as the original.
 deploy.cmd.*
 !deploy.cmd.example
+src.zip 
