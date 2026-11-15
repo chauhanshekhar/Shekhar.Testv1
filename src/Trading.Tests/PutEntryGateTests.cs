@@ -66,7 +66,9 @@ public class PutEntryGateTests
         decimal dayHigh = Spot + 100m,
         decimal candleOpen = Spot + 20m,    // body 20 of range 24 = 83%, bearish
         decimal candleClose = Spot,
-        MarketState marketState = MarketState.Trend)
+        MarketState marketState = MarketState.Trend,
+        decimal? rsi5m = null,
+        List<Trading.Domain.Entities.OptionChainData>? optionChain = null)
     {
         var engine = SignalEngineTestFactory.Create(settings ?? Settings());
 
@@ -77,12 +79,13 @@ public class PutEntryGateTests
             ema50: ema50,
             pcr: pcr,
             rsi: rsi,
+            rsi5m: rsi5m ?? rsi,   // entry RSI is 5m; default mirrors the 1m value
             currentVolume: currentVolume,
             avgVolume20: avgVolume20,
             priceChangePct: -0.50m,
             atrPct: 0.15m,
             atrRaw: atrRaw,
-            optionChain: SignalEngineTestFactory.BuildChain(Spot, peChangeInOi: (long)peChangeInOi),   // PE Delta = -0.50
+            optionChain: optionChain ?? SignalEngineTestFactory.BuildChain(Spot, peChangeInOi: (long)peChangeInOi),   // PE Delta = -0.50
             strategyHint: TradingConst.StrategyType.Single,
             ema20_5m: Spot + 40m,
             ema50_5m: Spot + 90m,
@@ -185,6 +188,102 @@ public class PutEntryGateTests
         Assert.Null(RunPut(rsi: 95m).Signal);
         Assert.NotNull(RunPut(Settings().SetInactive("PutRsiCeiling"), rsi: 95m).Signal);
         Assert.NotNull(RunPut(Settings().SetInactive("PutRsiFloor"), rsi: 5m).Signal);
+    }
+
+    [Fact]
+    public void Condition5_UsesFiveMinuteRsi_NotOneMinute()
+    {
+        var blocked = RunPut(rsi: 35m, rsi5m: 60m);
+        Assert.Null(blocked.Signal);
+        Assert.Contains(blocked.FailureReasons, x => x.Contains("5m RSI was 60.00"));
+
+        Assert.NotNull(RunPut(rsi: 80m, rsi5m: 35m).Signal);
+    }
+
+    [Fact]
+    public void Condition5_NullFiveMinuteRsi_FailsClosed()
+    {
+        var engine = SignalEngineTestFactory.Create(Settings());
+        var r = engine.GenerateSignalDetailed(
+            symbol: SignalEngineTestFactory.Symbol, ltp: Spot, ema20: Spot + 50m, ema50: Spot + 100m,
+            pcr: 0.75m, rsi: 35m, currentVolume: 0m, avgVolume20: 0m, priceChangePct: -0.50m,
+            atrPct: 0.15m, atrRaw: 30m,
+            optionChain: SignalEngineTestFactory.BuildChain(Spot),
+            strategyHint: TradingConst.StrategyType.Single,
+            lastClosedCandle: SignalEngineTestFactory.MakeCandle(
+                open: Spot + 20m, close: Spot, high: Spot + 22m, low: Spot - 2m),
+            prev5mLow: Spot + 10m, dayOpen: Spot + 100m, dayHigh: Spot + 100m, dayChangePct: -0.20m,
+            rsi5m: null);
+
+        Assert.Null(r.Signal);
+        Assert.Contains(r.FailureReasons, x => x.Contains("5m RSI was N/A"));
+    }
+
+    // ── 5b: optional second RSI band (EnablePutRsiBand2) ───────────────────────────────────
+
+    private static FakeStrategySettingsService Band2(bool enabled = true) =>
+        Settings()
+            .Set("EnablePutRsiBand2", enabled ? 1 : 0)
+            .Set("PutRsiBand2Floor", 42m)
+            .Set("PutRsiBand2Ceiling", 49m);
+
+    [Fact]
+    public void Band2_OffByDefault_RsiAboveCeilingStillRejected()
+        => Assert.Null(RunPut(Settings(), rsi: 45m).Signal);
+
+    [Fact]
+    public void Band2_On_AcceptsRsiInsideSecondBand()
+        => Assert.NotNull(RunPut(Band2(), rsi: 45m).Signal);
+
+    [Fact]
+    public void Band2_On_FirstBandStillAccepted()
+        => Assert.NotNull(RunPut(Band2(), rsi: 35m).Signal);
+
+    [Theory]
+    [InlineData(41.0)]   // gap between band 1 (<=40) and band 2 (>=42) stays rejected
+    [InlineData(49.5)]   // above band 2
+    [InlineData(27.9)]   // below band 1
+    public void Band2_On_OutsideBothBands_Rejected(double rsi)
+        => Assert.Null(RunPut(Band2(), rsi: (decimal)rsi).Signal);
+
+    [Fact]
+    public void Band2_SwitchedOff_BehavesLikeNoBand2()
+        => Assert.Null(RunPut(Band2(enabled: false), rsi: 45m).Signal);
+
+    // ── 2b: EMA gap (shared: EnableEmaGapFilter, EmaGapMinPoints, EmaGapMaxPoints) ─────────
+
+    private static FakeStrategySettingsService Gap(bool enabled = true, decimal min = 10m) =>
+        Settings().Set("EnableEmaGapFilter", enabled ? 1 : 0).Set("EmaGapMinPoints", min);
+
+    [Fact]
+    public void EmaGap_OffByDefault_TinyGapStillAccepted()
+        => Assert.NotNull(RunPut(Settings(), ema20: Spot + 50m, ema50: Spot + 55m).Signal);   // gap 5
+
+    [Theory]
+    [InlineData(50, 100, true)]     // gap 50
+    [InlineData(50, 61, true)]      // gap 11
+    [InlineData(50, 60, false)]     // gap exactly 10 -> strict >
+    [InlineData(50, 55, false)]     // gap 5
+    public void EmaGap_On_RequiresGapAboveMinimum(int ema20Offset, int ema50Offset, bool accepted)
+    {
+        var r = RunPut(Gap(), ema20: Spot + ema20Offset, ema50: Spot + ema50Offset);
+        Assert.Equal(accepted, r.Signal != null);
+    }
+
+    [Fact]
+    public void EmaGap_On_MinimumIsConfigurable()
+        => Assert.NotNull(RunPut(Gap(min: 4m), ema20: Spot + 50m, ema50: Spot + 55m).Signal);   // gap 5 > 4
+
+    [Fact]
+    public void EmaGap_SwitchedOff_BehavesLikeNoFilter()
+        => Assert.NotNull(RunPut(Gap(enabled: false), ema20: Spot + 50m, ema50: Spot + 55m).Signal);
+
+    [Fact]
+    public void EmaGap_MaxBound_RejectsGapAtOrAboveMaximum()
+    {
+        var s = Gap().Set("EmaGapMaxPoints", 40m);
+        Assert.NotNull(RunPut(s, ema20: Spot + 50m, ema50: Spot + 80m).Signal);   // gap 30
+        Assert.Null(RunPut(s, ema20: Spot + 50m, ema50: Spot + 90m).Signal);      // gap 40 -> strict <
     }
 
     // ── 6 & 7: bearish candle, body >= 30% ──────────────────────────────────────────────────
@@ -316,7 +415,60 @@ public class PutEntryGateTests
         Assert.NotNull(RunPut(enabled, pcr: 0.66m).Signal);
     }
 
-    // ── 13: OI change floor ─────────────────────────────────────────────────────────────────
+    // ── 12b: PCR floor, off unless PutPcrMinimum has a row ──────────────────────────────────
+    // (No row + filter enabled is covered above: Condition12_PcrGatesOnceExplicitlyEnabled fires at 0.66.)
+
+    [Fact]
+    public void Condition12b_FloorAlone_IsInertWithoutTheFilterEnabled()
+    {
+        // PutPcrMinimum does nothing on its own - EnablePutPcrFilter still defaults off.
+        Assert.NotNull(RunPut(Settings().Set("PutPcrMinimum", 0.70m), pcr: 0.60m).Signal);
+    }
+
+    [Fact]
+    public void Condition12b_FloorGatesOnceEnabled()
+    {
+        var enabled = Settings().Set("EnablePutPcrFilter", 1).Set("PutPcrMinimum", 0.70m);
+
+        // SENSEX PUT at PCR < 0.70 lost in the 2026-09-30 backtest -> 0.60 blocks, 0.75 passes
+        // (and stays under the 0.90 ceiling of condition 12).
+        var blocked = RunPut(enabled, pcr: 0.60m);
+        Assert.Null(blocked.Signal);
+        Assert.Contains(blocked.FailureReasons, x => x.Contains("12b PCR"));
+
+        Assert.NotNull(RunPut(enabled, pcr: 0.75m).Signal);
+    }
+
+    [Fact]
+    public void Condition12b_BoundaryIsInclusive()
+        => Assert.NotNull(RunPut(Settings().Set("EnablePutPcrFilter", 1).Set("PutPcrMinimum", 0.70m), pcr: 0.70m).Signal);
+
+    // ── Traded strike ───────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void IlliquidAtmStrike_StoresTheTradedNeighboursStrike()
+    {
+        // 2026-10-05 signal 124: ATM 54400, but the liquid leg (and the one traded) was 54500PE -
+        // StrikePrice stored 54400. Here the ATM PE fails NIFTY's volume floor (200,000), so the
+        // neighbouring 20050 PE is the liquid leg; StrikePrice must say 20050, matching the symbol.
+        var chain = SignalEngineTestFactory.BuildChain(Spot);
+        chain.Single(o => o.OptionType == TradingConst.OptionType.PE).Volume = 1_000;
+        chain.Add(new Trading.Domain.Entities.OptionChainData
+        {
+            Symbol = SignalEngineTestFactory.Symbol, TradingSymbol = "NIFTYTEST20050PE", StrikePrice = Spot + 50m,
+            OptionType = TradingConst.OptionType.PE, Ltp = 110m, Volume = 300_000,
+            OpenInterest = 30_000, Delta = -0.5m, UnderlyingLtp = 0m,
+        });
+
+        var signal = RunPut(optionChain: chain).Signal;
+
+        Assert.NotNull(signal);
+        Assert.Equal("NIFTYTEST20050PE", signal!.OptionSymbol);
+        Assert.Equal(Spot + 50m, signal.StrikePrice);
+        Assert.Equal(110m, signal.OptionLtp);
+    }
+
+    // ── 13: OI change floor
 
     [Theory]
     [InlineData(0, true)]

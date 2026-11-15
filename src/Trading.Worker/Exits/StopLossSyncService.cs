@@ -31,9 +31,18 @@ public class StopLossSyncService
         IOrderService orders,
         IRepository<Order> orderRepo,
         IRepository<Signal> signalRepo,
-        IUnitOfWork uow)
+        IUnitOfWork uow,
+        decimal currentOptionLtp = 0m)
     {
         if (signal.OptionSL <= 0) return;
+
+        // No protective SELL before the entry BUY has filled (it would be a naked short).
+        if (!StopLossOrderCoordinator.IsEntryFilled(signal.Status)) return;
+
+        // The broker stop follows the HIGHEST stop the ladder has armed — breakeven arm, step-lock
+        // and the index-T1 lock all write ProtectedSL — so Groww executes those exits itself instead
+        // of ExitWorker noticing, cancelling the resting SL_M and sending a MARKET sell.
+        var trigger = BrokerStopTrigger(signal.OptionSL, signal.ProtectedSL, currentOptionLtp);
 
         // Past the broker's intraday cutoff every SL_M placement is rejected on arrival, so
         // attempting one only produces rejection churn — and, worse, briefly flips
@@ -72,18 +81,33 @@ public class StopLossSyncService
             // a partial exit completes elsewhere (TradeCompletionService.CompletePartialExitAsync
             // resets OptionSL to breakeven but doesn't itself talk to the broker). Internally a
             // no-op once StopLossRetryCount hits the configured cap.
-            await _stopLossCoordinator.TryPlaceAsync(signal, signal.OptionSL, desiredQty, orders, orderRepo, signalRepo, uow);
+            await _stopLossCoordinator.TryPlaceAsync(signal, trigger, desiredQty, orders, orderRepo, signalRepo, uow);
             return;
         }
 
         // Tolerance guards float/rounding noise so a no-op cycle doesn't churn cancel/replace.
-        if (Math.Abs(signal.StopLossTriggerPrice - signal.OptionSL) < 0.05m)
+        if (Math.Abs(signal.StopLossTriggerPrice - trigger) < 0.05m)
             return;
 
         if (!await _stopLossCoordinator.TryCancelAsync(signal, orders, orderRepo, uow))
             return; // already filled, or unconfirmed — coordinator logged the reason; retry next cycle
 
-        await _stopLossCoordinator.TryPlaceAsync(signal, signal.OptionSL, desiredQty, orders, orderRepo, signalRepo, uow);
+        await _stopLossCoordinator.TryPlaceAsync(signal, trigger, desiredQty, orders, orderRepo, signalRepo, uow);
+    }
+
+    /// <summary>
+    /// Trigger for the resting SL_M: the higher of OptionSL (initial / ATR-trailed) and ProtectedSL
+    /// (breakeven arm, step-lock, index-T1 lock). A SELL stop must sit BELOW the current premium or
+    /// the broker fills/rejects it at once, so a ProtectedSL already at or above the last price
+    /// stays with ExitWorker's MARKET exit and the broker keeps the OptionSL-level stop.
+    /// </summary>
+    public static decimal BrokerStopTrigger(decimal optionSl, decimal protectedSl, decimal currentOptionLtp)
+    {
+        if (protectedSl <= optionSl)
+            return optionSl;
+        if (currentOptionLtp > 0 && protectedSl >= currentOptionLtp - 0.05m)
+            return optionSl;
+        return protectedSl;
     }
 
     // ── Cancel before any MARKET sell ───────────────────────────────────────────────────────

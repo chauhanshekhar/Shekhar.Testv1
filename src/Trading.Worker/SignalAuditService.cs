@@ -38,9 +38,7 @@ public class SignalAuditService
     /// </summary>
     public static void CaptureBlockedLeg(MarketSnapshot market, Signal signal, IndicatorSnapshot audit)
     {
-        var entryLeg = market.OptionChain
-            .FirstOrDefault(o => o.TradingSymbol == signal.OptionSymbol
-                              || (o.StrikePrice == signal.StrikePrice && o.OptionType == signal.OptionType));
+        var entryLeg = FindEntryLeg(market.OptionChain, signal);
 
         audit.BlockedStrikePrice = signal.StrikePrice;
         audit.BlockedOptionType = signal.OptionType;
@@ -49,6 +47,19 @@ public class SignalAuditService
         audit.BlockedOptionLtp = entryLeg?.Ltp;
         audit.BlockedChangeInOi = entryLeg?.ChangeInOi;
     }
+
+    /// <summary>
+    /// The chain row of the option the signal actually trades. Exact TradingSymbol first; the
+    /// strike/type match is only a fallback for a signal without a symbol. A single OR-predicate
+    /// returned whichever matching row came first in the chain, so when StrikePrice held the ATM
+    /// strike rather than the traded one, Delta/ChangeInOi could come from the wrong option.
+    /// Shared by the placement path (Signal.DeltaAtEntry) and the blocked-signal audit.
+    /// </summary>
+    internal static OptionChainData? FindEntryLeg(List<OptionChainData> chain, Signal signal)
+        => (string.IsNullOrWhiteSpace(signal.OptionSymbol)
+               ? null
+               : chain.FirstOrDefault(o => o.TradingSymbol == signal.OptionSymbol))
+           ?? chain.FirstOrDefault(o => o.StrikePrice == signal.StrikePrice && o.OptionType == signal.OptionType);
 
     // ── Best-effort, single insert, never blocks trading ─────────────────────────────────────
     // Failure is logged (not silently swallowed) but still never propagates — an audit-row insert

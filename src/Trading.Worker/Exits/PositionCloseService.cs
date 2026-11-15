@@ -202,12 +202,21 @@ public class PositionCloseService
         IRepository<TradeJournal> journalRepo,
         IRepository<Order> orderRepo,
         IUnitOfWork uow,
-        TradeCompletionService tradeCompletion)
+        TradeCompletionService tradeCompletion,
+        int stage = 1,
+        string exitReason = TradingConst.ExitReason.OptionT1Hit)
     {
-        var alreadyPartial =
-            await journalRepo.FirstOrDefaultAsync(
-                j => j.SignalId == signal.Id && j.IsPartial);
-        if (alreadyPartial != null) return;
+        // One partial sale per STAGE (1 = T1 or breakeven-arm sale, 2 = target-ladder middle
+        // target), not one per trade. Skipped when that many partial fills are already journalled,
+        // or when a partial SELL is still in flight at the broker - never two SELLs at once.
+        var completedPartials =
+            (await journalRepo.FindAsync(j => j.SignalId == signal.Id && j.IsPartial)).Count;
+        var inFlight =
+            await orderRepo.FirstOrDefaultAsync(
+                o => o.SignalId == signal.Id
+                  && o.OrderPurpose == Trading.Domain.OrderPurpose.PartialExit
+                  && o.Status == OrderStatus.Pending);
+        if (!ShouldPlacePartial(stage, completedPartials, inFlight != null)) return;
 
         // Same rule as the full close — never sell against an entry that never filled.
         if (!await HasConfirmedEntryFillAsync(signal, orderRepo))
@@ -247,6 +256,11 @@ public class PositionCloseService
             ProductType = "MIS",
             Status = OrderStatus.Pending,
             Quantity = closeLots,
+            // The premium the exit decision was made on. A MARKET order ignores it at the broker;
+            // PaperOrderStrategy fills at it (it used the last option-chain snapshot, up to ~30 s
+            // stale: signal 101's T1 half booked at 266.55 while the premium was above T1 280.06).
+            // Also the reference for measuring live slippage (Price vs AvgPrice).
+            Price = optionLtp,
             OrderedAt = IstClock.Now,
             UpdatedAt = IstClock.Now,
         };
@@ -254,7 +268,7 @@ public class PositionCloseService
         await uow.SaveChangesAsync();
 
         string partialOrderId;
-        try { partialOrderId = await orders.ClosePositionAsync(signal, TradingConst.ExitReason.OptionT1Hit, closeLots, partialOrder.OrderReferenceId); }
+        try { partialOrderId = await orders.ClosePositionAsync(signal, exitReason, closeLots, partialOrder.OrderReferenceId); }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Partial close FAILED for signal {Id}", signal.Id);
@@ -284,12 +298,17 @@ public class PositionCloseService
         await uow.SaveChangesAsync();
     }
 
+    /// <summary>The pure guard behind <see cref="HandlePartialExitAsync"/>. Exposed for testing.</summary>
+    internal static bool ShouldPlacePartial(int stage, int completedPartials, bool partialInFlight)
+        => !partialInFlight && completedPartials < stage;
+
     // ── Exit reason → OrderPurpose ────────────────────────────────────────────────────────────
     private static string MapExitReasonToPurpose(string exitReason) => exitReason switch
     {
-        TradingConst.ExitReason.OptionT1Hit or TradingConst.ExitReason.OptionT2Hit => Trading.Domain.OrderPurpose.Target,
+        TradingConst.ExitReason.OptionT1Hit or TradingConst.ExitReason.OptionT2Hit
+            or TradingConst.ExitReason.PartialT2 or TradingConst.ExitReason.PartialT3 or TradingConst.ExitReason.OptionT5Hit => Trading.Domain.OrderPurpose.Target,
         TradingConst.ExitReason.ForceExitEod => Trading.Domain.OrderPurpose.ForceExit,
-        TradingConst.ExitReason.OptionSlHit => Trading.Domain.OrderPurpose.StopLoss,
+        TradingConst.ExitReason.OptionSlHit or TradingConst.ExitReason.TrailingSlHit => Trading.Domain.OrderPurpose.StopLoss,
         _ => Trading.Domain.OrderPurpose.Exit, // HeroZero / IndexSlHit / PROTECTED_SL_HIT
     };
 }

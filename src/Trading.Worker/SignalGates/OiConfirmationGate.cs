@@ -5,12 +5,24 @@ namespace Trading.Worker.SignalGates;
 
 public class OiConfirmationGate : IPostSignalGate
 {
+    /// <summary>
+    /// Per-symbol StrategySettings switch. No row = ON (today's behaviour). Turning it off lets a
+    /// built setup through without waiting for a 1m candle to confirm in the trade's direction.
+    /// On 2026-10-05 the gate held setups 10-107 min, and the setups it rejected replayed as
+    /// profitably as those it passed (docs/research/2026-10-05-late-entry) - hence a switch to
+    /// test it off on paper, per symbol, rather than removing it.
+    /// </summary>
+    internal const string EnableKey = "EnableOiConfirmationGate";
+
     public Task<string?> BlockAsync(
         SignalContext ctx,
         MarketSnapshot market,
         Signal signal,
         CancellationToken ct)
     {
+        if (!ctx.StrategySettings.GetBool(EnableKey, ctx.Symbol, true))
+            return Task.FromResult<string?>(null);
+
         if (!market.OptionChain.Any())
             return Task.FromResult<string?>(null);
 

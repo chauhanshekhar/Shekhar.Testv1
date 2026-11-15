@@ -1,0 +1,67 @@
+entries replayed: 331 (CALL 117, PUT 214); split at 2026-10-22 11:19:00
+share of entries where OI change was exactly 0 (the only case where OI matters): 29.3 %
+         scope    variant  group   n    net     avg    pf  early_net  late_net
+      CALL ALL   live_oi2   PASS  68  53494   787.0  1.76      33810     19684
+      CALL ALL   live_oi2 REJECT  49   6021   123.0  1.11      -3143      9164
+      CALL ALL   wide_oi5   PASS  68  53494   787.0  1.76      33810     19684
+      CALL ALL   wide_oi5 REJECT  49   6021   123.0  1.11      -3143      9164
+      CALL ALL price_only   PASS  87  47641   548.0  1.52      28236     19405
+      CALL ALL price_only REJECT  30  11874   396.0  1.36       2431      9443
+      CALL ALL strict_oi2   PASS  30  22104   737.0  1.79      23591     -1487
+      CALL ALL strict_oi2 REJECT  87  37411   430.0  1.39       7076     30336
+    CALL NIFTY   live_oi2   PASS  12  24163  2014.0  4.13       8588     15576
+    CALL NIFTY   live_oi2 REJECT   9  -1745  -194.0  0.89      -1550      -195
+    CALL NIFTY   wide_oi5   PASS  12  24163  2014.0  4.13       8588     15576
+    CALL NIFTY   wide_oi5 REJECT   9  -1745  -194.0  0.89      -1550      -195
+    CALL NIFTY price_only   PASS  12  24163  2014.0  4.13       8588     15576
+    CALL NIFTY price_only REJECT   9  -1745  -194.0  0.89      -1550      -195
+    CALL NIFTY strict_oi2   PASS   6  10944  1824.0 10.77       7347      3596
+    CALL NIFTY strict_oi2 REJECT  15  11474   765.0  1.52       -310     11784
+CALL BANKNIFTY   live_oi2   PASS  46  38648   840.0  1.76      29936      8712
+CALL BANKNIFTY   live_oi2 REJECT   0      0     NaN   NaN          0         0
+CALL BANKNIFTY   wide_oi5   PASS  46  38648   840.0  1.76      29936      8712
+CALL BANKNIFTY   wide_oi5 REJECT   0      0     NaN   NaN          0         0
+CALL BANKNIFTY price_only   PASS  46  38648   840.0  1.76      29936      8712
+CALL BANKNIFTY price_only REJECT   0      0     NaN   NaN          0         0
+CALL BANKNIFTY strict_oi2   PASS  19  18991  1000.0  2.00      18322       669
+CALL BANKNIFTY strict_oi2 REJECT  27  19657   728.0  1.62      11613      8043
+   CALL SENSEX   live_oi2   PASS  10  -9317  -932.0  0.23      -4714     -4603
+   CALL SENSEX   live_oi2 REJECT  40   7766   194.0  1.20      -1593      9359
+   CALL SENSEX   wide_oi5   PASS  10  -9317  -932.0  0.23      -4714     -4603
+   CALL SENSEX   wide_oi5 REJECT  40   7766   194.0  1.20      -1593      9359
+   CALL SENSEX price_only   PASS  29 -15169  -523.0  0.55     -10287     -4882
+   CALL SENSEX price_only REJECT  21  13619   649.0  1.79       3981      9638
+   CALL SENSEX strict_oi2   PASS   5  -7831 -1566.0  0.00      -2078     -5753
+   CALL SENSEX strict_oi2 REJECT  45   6280   140.0  1.15      -4228     10509
+       PUT ALL   live_oi2   PASS 123 -52943  -430.0  0.69     -28038    -24905
+       PUT ALL   live_oi2 REJECT  91  15053   165.0  1.20      16199     -1147
+       PUT ALL   wide_oi5   PASS 124 -50505  -407.0  0.70     -25600    -24905
+       PUT ALL   wide_oi5 REJECT  90  12615   140.0  1.17      13762     -1147
+       PUT ALL price_only   PASS 165 -55065  -334.0  0.73     -23614    -31451
+       PUT ALL price_only REJECT  49  17175   351.0  1.46      11775      5399
+       PUT ALL strict_oi2   PASS  64 -31228  -488.0  0.65      -8348    -22880
+       PUT ALL strict_oi2 REJECT 150  -6662   -44.0  0.96      -3490     -3172
+     PUT NIFTY   live_oi2   PASS  11   -656   -60.0  0.96       -968       312
+     PUT NIFTY   live_oi2 REJECT  12  -4505  -375.0  0.76       1655     -6160
+     PUT NIFTY   wide_oi5   PASS  11   -656   -60.0  0.96       -968       312
+     PUT NIFTY   wide_oi5 REJECT  12  -4505  -375.0  0.76       1655     -6160
+     PUT NIFTY price_only   PASS  11   -656   -60.0  0.96       -968       312
+     PUT NIFTY price_only REJECT  12  -4505  -375.0  0.76       1655     -6160
+     PUT NIFTY strict_oi2   PASS   5   -364   -73.0  0.94       1909     -2273
+     PUT NIFTY strict_oi2 REJECT  18  -4796  -266.0  0.83      -1221     -3575
+ PUT BANKNIFTY   live_oi2   PASS  82 -46919  -572.0  0.62     -25293    -21626
+ PUT BANKNIFTY   live_oi2 REJECT   0      0     NaN   NaN          0         0
+ PUT BANKNIFTY   wide_oi5   PASS  82 -46919  -572.0  0.62     -25293    -21626
+ PUT BANKNIFTY   wide_oi5 REJECT   0      0     NaN   NaN          0         0
+ PUT BANKNIFTY price_only   PASS  82 -46919  -572.0  0.62     -25293    -21626
+ PUT BANKNIFTY price_only REJECT   0      0     NaN   NaN          0         0
+ PUT BANKNIFTY strict_oi2   PASS  41 -30309  -739.0  0.54     -10973    -19336
+ PUT BANKNIFTY strict_oi2 REJECT  41 -16609  -405.0  0.72     -14320     -2290
+    PUT SENSEX   live_oi2   PASS  30  -5369  -179.0  0.82      -1778     -3591
+    PUT SENSEX   live_oi2 REJECT  79  19557   248.0  1.35      14544      5013
+    PUT SENSEX   wide_oi5   PASS  31  -2931   -95.0  0.90        660     -3591
+    PUT SENSEX   wide_oi5 REJECT  78  17120   219.0  1.31      12106      5013
+    PUT SENSEX price_only   PASS  72  -7491  -104.0  0.89       2646    -10137
+    PUT SENSEX price_only REJECT  37  21679   586.0  2.12      10120     11559
+    PUT SENSEX strict_oi2   PASS  18   -555   -31.0  0.97        716     -1271
+    PUT SENSEX strict_oi2 REJECT  91  14743   162.0  1.22      12051      2693

@@ -54,6 +54,38 @@ public class StopLossOrderCoordinator
         if (triggerPrice <= 0)
             return false;
 
+        // A stop may only protect a FILLED entry. On 2026-09-30 signal 93 got an SL_M (a naked
+        // SELL) while its BUY was still unconfirmed; the BUY was then rejected.
+        if (!IsEntryFilled(signal.Status))
+        {
+            _logger.LogWarning(
+                "SL_M placement for signal {Id} {Symbol} refused — entry not filled (Status={Status})",
+                signal.Id, signal.Symbol, signal.Status);
+            return false;
+        }
+
+        // Never a second resting SELL. The claim below keys on signal.StopLossOrderId, which a stale
+        // save elsewhere can blank while the old stop is still resting at the broker. On
+        // 2026-09-30 that let signal 91 collect five extra SL_M orders; Groww saw each as a naked
+        // short (RMS: margin required 1.69 lakh) and then rejected every exit for the same reason.
+        // The Orders table is the ground truth: if a non-terminal stop row exists, re-link to it.
+        var resting = await FindRestingStopsAsync(signal, orderRepo);
+        if (resting.Count > 0)
+        {
+            var current = resting.OrderByDescending(o => o.OrderedAt).First();
+            if (signal.StopLossOrderId != current.BrokerOrderId)
+            {
+                _logger.LogWarning(
+                    "SL_M placement for signal {Id} {Symbol} skipped — {OrderId} is still resting at the broker; re-linking instead of placing a duplicate",
+                    signal.Id, signal.Symbol, current.BrokerOrderId);
+                signal.StopLossOrderId = current.BrokerOrderId;
+                signal.StopLossTriggerPrice = current.TriggerPrice;
+                signal.StopLossStatus = "PLACED";
+                await uow.SaveChangesAsync();
+            }
+            return false;
+        }
+
         var cfg = await _settingsService.GetAsync();
         if (signal.StopLossRetryCount >= cfg.MaxStopLossRetries)
         {
@@ -196,6 +228,12 @@ public class StopLossOrderCoordinator
         IRepository<Order> orderRepo,
         IUnitOfWork uow)
     {
+        // Any resting stop the signal lost track of must go too, or the following MARKET sell is a
+        // second SELL against one lot and Groww rejects it as a naked short.
+        var orphans = await CancelOrphanStopsAsync(signal, orders, orderRepo, uow);
+        if (orphans != StopLossCancelResult.Cleared)
+            return orphans;
+
         if (string.IsNullOrEmpty(signal.StopLossOrderId))
             return StopLossCancelResult.Cleared;
 
@@ -271,6 +309,81 @@ public class StopLossOrderCoordinator
 
         return StopLossCancelResult.Cleared;
     }
+
+    private async Task<StopLossCancelResult> CancelOrphanStopsAsync(
+        Signal signal, IOrderService orders, IRepository<Order> orderRepo, IUnitOfWork uow)
+    {
+        var orphans = (await FindRestingStopsAsync(signal, orderRepo))
+            .Where(o => o.BrokerOrderId != signal.StopLossOrderId)
+            .ToList();
+        if (orphans.Count == 0)
+            return StopLossCancelResult.Cleared;
+
+        foreach (var o in orphans)
+        {
+            bool cancelled;
+            try { cancelled = await orders.CancelOrderAsync(o.BrokerOrderId); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Cancel of orphan SL_M {OrderId} FAILED for signal {Id}", o.BrokerOrderId, signal.Id);
+                cancelled = false;
+            }
+
+            if (cancelled)
+            {
+                _logger.LogWarning("Cancelled orphan SL_M {OrderId} for signal {Id} {Symbol}", o.BrokerOrderId, signal.Id, signal.Symbol);
+                o.Status = OrderStatus.Cancelled;
+                o.UpdatedAt = IstClock.Now;
+                continue;
+            }
+
+            BrokerOrderStatus? status = null;
+            try { status = await orders.GetOrderStatusAsync(o.BrokerOrderId); }
+            catch (Exception) { /* unknown -> Unconfirmed below */ }
+            var reported = status?.Status?.ToUpperInvariant() ?? "";
+
+            if (IsFilled(reported))
+            {
+                await uow.SaveChangesAsync();
+                return StopLossCancelResult.AlreadyFilled;
+            }
+
+            if (IsDead(reported))
+            {
+                o.Status = reported == "REJECTED" ? OrderStatus.Rejected : OrderStatus.Cancelled;
+                o.UpdatedAt = IstClock.Now;
+                continue;
+            }
+
+            await uow.SaveChangesAsync();
+            _logger.LogError(
+                "Orphan SL_M {OrderId} for signal {Id} {Symbol} could not be cancelled (status={Status}) — holding exit to avoid a double sell",
+                o.BrokerOrderId, signal.Id, signal.Symbol, string.IsNullOrEmpty(reported) ? "unknown" : reported);
+            return IsLive(reported) ? StopLossCancelResult.StillResting : StopLossCancelResult.Unconfirmed;
+        }
+
+        await uow.SaveChangesAsync();
+        return StopLossCancelResult.Cleared;
+    }
+
+    /// <summary>Stop-loss orders for the signal that the broker may still be holding.</summary>
+    public static async Task<List<Order>> FindRestingStopsAsync(Signal signal, IRepository<Order> orderRepo)
+        => (await orderRepo.FindAsync(o => o.SignalId == signal.Id
+                                        && o.OrderPurpose == OrderPurpose.StopLoss
+                                        && o.BrokerOrderId != ""))
+            .Where(IsRestingStopRow)
+            .ToList();
+
+    public static bool IsRestingStopRow(Order o)
+        => o.OrderPurpose == OrderPurpose.StopLoss
+           && !string.IsNullOrEmpty(o.BrokerOrderId)
+           && !IsFilled(o.Status.ToUpperInvariant())
+           && !IsDead(o.Status.ToUpperInvariant());
+
+    /// <summary>Statuses in which the entry BUY has filled, so a protective SELL is not a naked short.</summary>
+    public static bool IsEntryFilled(string signalStatus)
+        => signalStatus is SignalStatus.Active or SignalStatus.PartialExitPending
+                        or SignalStatus.ExitPending or SignalStatus.CloseFailed;
 
     // Groww reports NEW/ACKED/TRIGGER_PENDING/APPROVED/EXECUTED/COMPLETED/REJECTED/CANCELLED;
     // our own BrokerOrderStatus adds PENDING/OPEN/COMPLETE. Match both vocabularies.

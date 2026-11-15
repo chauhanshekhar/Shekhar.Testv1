@@ -1,0 +1,150 @@
+diff --git a/src/Trading.Backtest/Configurations/BacktestConfiguration.cs b/src/Trading.Backtest/Configurations/BacktestConfiguration.cs
+index 0744b37..dfdcf53 100644
+--- a/src/Trading.Backtest/Configurations/BacktestConfiguration.cs
++++ b/src/Trading.Backtest/Configurations/BacktestConfiguration.cs
+@@ -20,7 +20,7 @@ public sealed record SettingChange(string Key, string? Symbol, SettingChangeKind
+ public sealed record SlotRules(int MaxConcurrent = 1, bool PerSymbol = false, bool NoHandoffCooldown = false);
+ 
+ /// <summary>Control-arm sampling: keep only every Nth valid entry (no market information).</summary>
+-public sealed record SamplingRules(int KeepEveryNth = 1, int? MaxTradesPerSymbolDay = null);
++public sealed record SamplingRules(int KeepEveryNth = 1, int? MaxTradesPerSymbolDay = null, bool ConfirmNextBar = false);
+ 
+ public sealed record BacktestConfiguration(string Name, TradeSide Side, string Description, IReadOnlyList<SettingChange> Changes, EntryRules? Rules = null, SlotRules? Slots = null, SamplingRules? Sampling = null)
+ {
+@@ -612,6 +612,18 @@ public static class ConfigurationCatalog
+     /// symbol-day, and a time window the snapshot drift says is dead (10:00-11:00). If an informed
+     /// filter does no better than these at the same trade count, it is not adding information.
+     /// </summary>
++    /// <summary>Experiment: enter only after the next 1m bar closes in the trade's direction (paying that bar's move).</summary>
++    public static IReadOnlyList<BacktestConfiguration> BuildConfirmBar(TradeSide side)
++    {
++        var tag = side == TradeSide.Call ? "CALL" : "PUT";
++        return
++        [
++            new($"{tag}|Confirm|Baseline", side, "live rules", [], null),
++            new($"{tag}|Confirm|NextBar", side, "enter after the next 1m bar closes in the trade's direction", [], null, null,
++                new SamplingRules(ConfirmNextBar: true)),
++        ];
++    }
++
+     public static IReadOnlyList<BacktestConfiguration> BuildThinningControl(TradeSide side)
+     {
+         var tag = side == TradeSide.Call ? "CALL" : "PUT";
+diff --git a/src/Trading.Backtest/Program.cs b/src/Trading.Backtest/Program.cs
+index ca52cb8..56c03ba 100644
+--- a/src/Trading.Backtest/Program.cs
++++ b/src/Trading.Backtest/Program.cs
+@@ -181,6 +181,7 @@ internal static class Program
+         : o.Has("base-rate") ? ConfigurationCatalog.BuildBaseRate(s)
+         : o.Has("efficiency-sweep") ? ConfigurationCatalog.BuildEfficiencySweep(s, grid)
+         : o.Has("stretch-by-opening") ? ConfigurationCatalog.BuildStretchByOpening(s, grid)
++        : o.Has("confirm-bar") ? ConfigurationCatalog.BuildConfirmBar(s)
+         : o.Has("slot-sweep") ? ConfigurationCatalog.BuildSlotSweep(s)
+         : o.Has("stretch-sweep") ? ConfigurationCatalog.BuildStretchSweep(s, grid)
+         : o.Has("opening-types") ? ConfigurationCatalog.BuildOpeningTypes(s, grid)
+diff --git a/src/Trading.Backtest/Reporting/GridRunner.cs b/src/Trading.Backtest/Reporting/GridRunner.cs
+index 102ba94..07af4b9 100644
+--- a/src/Trading.Backtest/Reporting/GridRunner.cs
++++ b/src/Trading.Backtest/Reporting/GridRunner.cs
+@@ -58,7 +58,8 @@ public sealed class GridRunner
+                 MaxConcurrentPositions: config.Slots?.MaxConcurrent ?? 1,
+                 PerSymbolSlots: config.Slots?.PerSymbol ?? false,
+                 DisableHandoffCooldown: config.Slots?.NoHandoffCooldown ?? false,
+-                KeepEveryNth: config.Sampling?.KeepEveryNth);
++                KeepEveryNth: config.Sampling?.KeepEveryNth,
++                ConfirmNextBar: config.Sampling?.ConfirmNextBar ?? false);
+ 
+             foreach (var symbol in data.Select(d => d.Symbol).Append("ALL"))
+             {
+diff --git a/src/Trading.Backtest/Simulation/ExecutionSimulator.cs b/src/Trading.Backtest/Simulation/ExecutionSimulator.cs
+index a7f8c64..bc3527b 100644
+--- a/src/Trading.Backtest/Simulation/ExecutionSimulator.cs
++++ b/src/Trading.Backtest/Simulation/ExecutionSimulator.cs
+@@ -42,7 +42,12 @@ public sealed record SimulationOptions(
+     /// CONTROL ARM. Take only every Nth otherwise-valid entry. Deterministic and carries no market
+     /// information, so it isolates how much of a filter's benefit is just "fewer trades, fewer costs".
+     /// </summary>
+-    int? KeepEveryNth = null);
++    int? KeepEveryNth = null,
++    /// <summary>
++    /// EXPERIMENT. Enter only after the next 1m bar closes in the trade's direction, and enter AT that
++    /// close (the forfeited move is paid, so there is no look-ahead). Unconfirmed signals are blocked as "ConfirmBar".
++    /// </summary>
++    bool ConfirmNextBar = false);
+ 
+ public sealed class SimulationResult
+ {
+@@ -197,10 +202,10 @@ public sealed class ExecutionSimulator
+                 continue;
+             }
+ 
+-            var trade = Execute(p, d, opt, verdict.Path);
++            var trade = Execute(p, d, opt, verdict.Path, out var unconfirmed);
+             if (trade is null)
+             {
+-                Block(result, "NoPathAfterEntry");
++                Block(result, unconfirmed ? "ConfirmBar" : "NoPathAfterEntry");
+                 continue;
+             }
+ 
+@@ -217,21 +222,39 @@ public sealed class ExecutionSimulator
+     private static void Block(SimulationResult r, string gate) =>
+         r.BlockedBy[gate] = r.BlockedBy.GetValueOrDefault(gate) + 1;
+ 
+-    private Trade? Execute(MarketPoint p, SymbolData d, SimulationOptions opt, string entryPath)
++    private Trade? Execute(MarketPoint p, SymbolData d, SimulationOptions opt, string entryPath, out bool unconfirmed)
+     {
++        unconfirmed = false;
+         var sign = opt.Side == TradeSide.Call ? 1.0 : -1.0;
+         var cfg = _exit.Symbols[p.Symbol];
+ 
+         // the path: following 1m bars of the same session up to (not including) 15:15 IST
+         var endUtc = p.TimeUtc.Date + SessionClock.EntryEndUtc;
++        var startBar = p.NextBarIndex;
++        var entryLtp = p.Ltp;
++        var entryUtc = p.TimeUtc;
++        if (opt.ConfirmNextBar)
++        {
++            if (startBar >= d.Bars.Length || d.Bars[startBar].OpenUtc.Date != p.TimeUtc.Date)
++                return null;
++            var confirm = d.Bars[startBar];
++            if (!(sign * (confirm.Close - p.Ltp) > 0))
++            {
++                unconfirmed = true;
++                return null;
++            }
++            entryLtp = confirm.Close;                       // paid price: the move during the confirm bar is forfeited
++            entryUtc = confirm.OpenUtc.AddMinutes(1);
++            startBar++;
++        }
+         var indexMoves = new List<double>();
+         var closeTimes = new List<DateTime>();
+-        for (var q = p.NextBarIndex; q < d.Bars.Length; q++)
++        for (var q = startBar; q < d.Bars.Length; q++)
+         {
+             var bar = d.Bars[q];
+             if (bar.OpenUtc.Date != p.TimeUtc.Date || bar.OpenUtc >= endUtc)
+                 break;
+-            indexMoves.Add(sign * (bar.Close - p.Ltp));
++            indexMoves.Add(sign * (bar.Close - entryLtp));
+             closeTimes.Add(bar.OpenUtc.AddMinutes(1));
+         }
+         if (indexMoves.Count == 0)
+@@ -244,7 +267,7 @@ public sealed class ExecutionSimulator
+ 
+         if (opt.PremiumMode == PremiumMode.OptionHistoryWhereAvailable && _options is not null)
+         {
+-            var real = _options.TryPath(p.Symbol, opt.Side, p.TimeIst, closeTimes.Select(c => c + SessionClock.IstOffset).ToList());
++            var real = _options.TryPath(p.Symbol, opt.Side, entryUtc + SessionClock.IstOffset, closeTimes.Select(c => c + SessionClock.IstOffset).ToList());
+             if (real is not null)
+             {
+                 source = PremiumSource.OptionMinuteHistory;
+@@ -262,7 +285,7 @@ public sealed class ExecutionSimulator
+         double? cost = opt.Costs is { } c ? c.Cost(replay.Orders, cfg.LotSize, _exit.Lots) : null;
+         var exitUtc = closeTimes[Math.Min(replay.ExitStep, closeTimes.Count - 1)];
+ 
+-        return new Trade(p.Symbol, opt.Side, p.TimeUtc, exitUtc, entryPath, source, entryPremium, r,
++        return new Trade(p.Symbol, opt.Side, entryUtc, exitUtc, entryPath, source, entryPremium, r,
+             pnl, cost, replay.ExitReason, replay.Orders, replay.ReachedT1, replay.ReachedMid, replay.ReachedFinal,
+             Entry: new EntryContext(
+                 p.Rsi1m, p.Rsi5m, p.Pcr, p.AtrPct, p.OpenGapPct, p.DayChangePct,

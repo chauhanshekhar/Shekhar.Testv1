@@ -1,0 +1,140 @@
+diff --git a/src/Trading.Backtest/Configurations/BacktestConfiguration.cs b/src/Trading.Backtest/Configurations/BacktestConfiguration.cs
+index 0744b37..b9f9ff8 100644
+--- a/src/Trading.Backtest/Configurations/BacktestConfiguration.cs
++++ b/src/Trading.Backtest/Configurations/BacktestConfiguration.cs
+@@ -612,6 +612,24 @@ public static class ConfigurationCatalog
+     /// symbol-day, and a time window the snapshot drift says is dead (10:00-11:00). If an informed
+     /// filter does no better than these at the same trade count, it is not adding information.
+     /// </summary>
++    /// <summary>
++    /// Experiment: switch the live previous-5-minute level condition ON (CALL: LTP above the last closed 5m high,
++    /// PUT: below its low) against the live rules, where it is off. LTP is already a closed 1m close.
++    /// </summary>
++    public static IReadOnlyList<BacktestConfiguration> BuildBreakoutLevel(TradeSide side)
++    {
++        var tag = side == TradeSide.Call ? "CALL" : "PUT";
++        var key = side == TradeSide.Call ? "EnableCallPrev5mHighFilter" : "EnablePutPrev5mLowFilter";
++        return
++        [
++            new($"{tag}|Breakout|Baseline", side, "live rules (level filter off)", [], null),
++            new($"{tag}|Breakout|Prev5mLevelOn", side,
++                side == TradeSide.Call ? "CALL also needs a close above the last closed 5m high"
++                                       : "PUT also needs a close below the last closed 5m low",
++                [SettingChange.Set(key, 1m)]),
++        ];
++    }
++
+     public static IReadOnlyList<BacktestConfiguration> BuildThinningControl(TradeSide side)
+     {
+         var tag = side == TradeSide.Call ? "CALL" : "PUT";
+diff --git a/src/Trading.Backtest/Data/MarketModels.cs b/src/Trading.Backtest/Data/MarketModels.cs
+index 109017f..e5d97b8 100644
+--- a/src/Trading.Backtest/Data/MarketModels.cs
++++ b/src/Trading.Backtest/Data/MarketModels.cs
+@@ -37,6 +37,10 @@ public sealed record MarketPoint
+     /// <summary>Highest high of the 10 closed 1m bars before the last one (breakout test).</summary>
+     public double MaxHigh10Prior { get; init; }
+ 
++    /// <summary>High / low of the last CLOSED 5m bar (what production reads as LastClosed5mCandle); 0 until one exists.</summary>
++    public double Prev5mHigh { get; init; }
++    public double Prev5mLow { get; init; }
++
+     /// <summary>Opening gap: (first bar open of today - last close of the previous session) / previous close x 100; null on the first session in the data.</summary>
+     public double? OpenGapPct { get; init; }
+ 
+diff --git a/src/Trading.Backtest/Entry/EntryEvaluator.cs b/src/Trading.Backtest/Entry/EntryEvaluator.cs
+index c9d379c..97e971d 100644
+--- a/src/Trading.Backtest/Entry/EntryEvaluator.cs
++++ b/src/Trading.Backtest/Entry/EntryEvaluator.cs
+@@ -602,7 +602,7 @@ public sealed class EntryEvaluator
+         Ltp: (decimal)p.Ltp, Ema20: (decimal)p.Ema20, Ema50: (decimal)p.Ema50,
+         Rsi: (decimal)p.Rsi1m, Rsi5m: p.Rsi5m is { } r ? (decimal)r : null,
+         Pcr: (decimal)(p.Pcr ?? 0), AtrPct: (decimal)p.AtrPct, PriceChangePct: (decimal)p.DayChangePct,
+-        CurrentVolume: 0, AvgVolume20: 0, Vwap: 0, Prev5mHigh: 0, Prev5mLow: 0,
++        CurrentVolume: 0, AvgVolume20: 0, Vwap: 0, Prev5mHigh: (decimal)p.Prev5mHigh, Prev5mLow: (decimal)p.Prev5mLow,
+         DayOpen: (decimal)p.DayOpen, DayLow: (decimal)p.DayLow, DayHigh: (decimal)p.DayHigh, DayChangePct: (decimal)p.DayChangePct,
+         // Recovered exactly from the gap the series already carries: OpenGapPct was computed as
+         // (SessionOpen - prevClose) / prevClose * 100. 0 when the first session has no previous close,
+diff --git a/src/Trading.Backtest/Indicators/MarketSeriesBuilder.cs b/src/Trading.Backtest/Indicators/MarketSeriesBuilder.cs
+index a0c3df0..9b36337 100644
+--- a/src/Trading.Backtest/Indicators/MarketSeriesBuilder.cs
++++ b/src/Trading.Backtest/Indicators/MarketSeriesBuilder.cs
+@@ -113,6 +113,8 @@ public static class MarketSeriesBuilder
+             Ema20_5m = e20_5,
+             Ema50_5m = e50_5,
+             LastClosedBar = b1[j - 1],
++            Prev5mHigh = k > 0 ? b5[k - 1].High : 0.0,
++            Prev5mLow = k > 0 ? b5[k - 1].Low : 0.0,
+             SessionOpen = b1[dayStart].Open,
+             SessionLow = MinLow(b1, dayStart, j),
+             MinLow10 = MinLow(b1, Math.Max(0, j - 10), j),
+diff --git a/src/Trading.Backtest/Program.cs b/src/Trading.Backtest/Program.cs
+index ca52cb8..ea0a05a 100644
+--- a/src/Trading.Backtest/Program.cs
++++ b/src/Trading.Backtest/Program.cs
+@@ -175,6 +175,7 @@ internal static class Program
+     private static IReadOnlyList<BacktestConfiguration> SelectConfigurations(Args o, TradeSide s, GridOptions grid) =>
+         o.Has("opening-rsi") ? ConfigurationCatalog.BuildOpeningRsiSweep(s)
+         : o.Has("session-trend") ? ConfigurationCatalog.BuildSessionTrendSweep(s)
++        : o.Has("breakout-level") ? ConfigurationCatalog.BuildBreakoutLevel(s)
+         : o.Has("thinning") ? ConfigurationCatalog.BuildThinningControl(s)
+         : o.Has("gapdown-put") ? ConfigurationCatalog.BuildGapDownPutSweep(s)
+         : o.Has("opening-band") ? ConfigurationCatalog.BuildOpeningBandSweep(s)
+diff --git a/b/src/Trading.Tests/Backtest/BacktestBreakoutLevelTests.cs b/src/Trading.Tests/Backtest/BacktestBreakoutLevelTests.cs
+new file mode 100644
+index 0000000..fec30eb
+--- /dev/null
++++ b/src/Trading.Tests/Backtest/BacktestBreakoutLevelTests.cs
+@@ -0,0 +1,52 @@
++using Trading.Backtest.Entry;
++using Trading.Backtest.Settings;
++using Xunit;
++
++namespace Trading.Tests.Backtest;
++
++/// <summary>The previous-5-minute level condition, replayed through the live EvaluateCall / EvaluatePut once Prev5mHigh/Prev5mLow are carried on the point.</summary>
++public class BacktestBreakoutLevelTests
++{
++    private static readonly DateTime T = BtSupport.At(4, 30);      // 10:00 IST
++
++    private static EntryEvaluator Eval(bool callLevelOn = false, bool putLevelOn = false)
++    {
++        var s = BtSupport.LiveLike();
++        if (callLevelOn) s.Set("EnableCallPrev5mHighFilter", null, 1);
++        if (putLevelOn) s.Set("EnablePutPrev5mLowFilter", null, 1);
++        return new EntryEvaluator(s, BtSupport.Trading(), BtSupport.Instruments());
++    }
++
++    [Fact]
++    public void WithTheFilterOffTheLevelIsIgnored()
++    {
++        var p = BtSupport.CallPoint("NIFTY", T) with { Prev5mHigh = 1_000_000 };
++        Assert.True(Eval().Evaluate(p, TradeSide.Call).Candidate);                 // live rules: filter off, unchanged
++    }
++
++    [Theory]
++    [InlineData(23939.0, true)]      // LTP (23940 for CallPoint) closes above the 5m high
++    [InlineData(23940.0, false)]     // equal is not a break
++    [InlineData(24500.0, false)]
++    public void CallNeedsAClosedPriceAboveThePrevious5mHighWhenOn(double prev5mHigh, bool expected)
++    {
++        var p = BtSupport.CallPoint("NIFTY", T) with { Prev5mHigh = prev5mHigh };
++        Assert.Equal(expected, Eval(callLevelOn: true).Evaluate(p, TradeSide.Call).Candidate);
++    }
++
++    [Fact]
++    public void AMissingLevelFailsClosedWhenOn()
++    {
++        var p = BtSupport.CallPoint("NIFTY", T) with { Prev5mHigh = 0 };
++        Assert.False(Eval(callLevelOn: true).Evaluate(p, TradeSide.Call).Candidate);
++    }
++
++    [Theory]
++    [InlineData(1000000.0, true)]    // far above LTP: the PUT closes below the 5m low
++    [InlineData(0.0, false)]         // 0 = unavailable, fails closed
++    public void PutNeedsAClosedPriceBelowThePrevious5mLowWhenOn(double prev5mLow, bool expected)
++    {
++        var p = BtSupport.PutPoint("NIFTY", T) with { Prev5mLow = prev5mLow };
++        Assert.Equal(expected, Eval(putLevelOn: true).Evaluate(p, TradeSide.Put).Candidate);
++    }
++}

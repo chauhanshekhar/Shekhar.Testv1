@@ -40,14 +40,15 @@ public static class ExitDataLoader
     }
 
     // ── Latest ticks ──────────────────────────────────────────────────────────
-    public static async Task<Dictionary<string, decimal>> LoadLatestTicksAsync(
-        IRepository<MarketTick> tickRepo)
-    {
-        var cutoff = IstClock.Now.AddSeconds(-30);
-        return (await tickRepo.FindAsync(t => t.TickTime >= cutoff))
-            .GroupBy(t => t.Symbol)
-            .ToDictionary(g => g.Key, g => g.OrderByDescending(t => t.TickTime).First().LastPrice);
-    }
+    // One TOP(3) seek per symbol, median price (see MarketTickQueries): a single bad print (feed
+    // fallback to the previous close) must not arm index-T1 protection or hit the index SL.
+    // Still a per-symbol seek, never a scan. The previous TickTime-only filter scanned
+    // the whole table twice a cycle and deadlocked with MarketFeedWorker's per-second tick insert:
+    // 22 deadlocks on 2026-10-07, each aborting the exit cycle for every open position.
+    public static Task<Dictionary<string, decimal>> LoadLatestTicksAsync(
+        IRepository<MarketTick> tickRepo,
+        IEnumerable<string> symbols)
+        => tickRepo.MedianRecentPricesAsync(symbols, IstClock.Now.AddSeconds(-30));
 
     // ── Latest option chain snapshot ──────────────────────────────────────────
     // One snapshot per SYMBOL, not one globally. Each SnapshotId covers exactly one symbol, so
@@ -231,12 +232,8 @@ public static class ExitDataLoader
         IRepository<PaperTrade> paperRepo,
         IRepository<MarketTick> tickRepo)
     {
-        var cutoff       = IstClock.Now.AddSeconds(-30);
-        var ltpBySymbol  = (await tickRepo.FindAsync(t => t.TickTime >= cutoff))
-            .GroupBy(t => t.Symbol)
-            .ToDictionary(g => g.Key, g => g.OrderByDescending(t => t.TickTime).First().LastPrice);
-
         var openTrades   = await paperRepo.FindAsync(p => p.Status == "OPEN");
+        var ltpBySymbol  = await LoadLatestTicksAsync(tickRepo, openTrades.SelectMany(TickSymbols));
         var unrealized   = 0m;
 
         foreach (var p in openTrades)
@@ -258,5 +255,13 @@ public static class ExitDataLoader
         }
 
         return unrealized;
+    }
+
+    /// <summary>The tick symbols ComputeUnrealizedPnlAsync looks up for one paper trade.</summary>
+    private static IEnumerable<string> TickSymbols(PaperTrade p)
+    {
+        yield return !string.IsNullOrEmpty(p.OptionSymbol) ? p.OptionSymbol : p.Symbol;
+        if (!string.IsNullOrEmpty(p.Leg2OptionSymbol))
+            yield return p.Leg2OptionSymbol;
     }
 }

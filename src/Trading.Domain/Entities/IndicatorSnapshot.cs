@@ -12,6 +12,7 @@ public class IndicatorSnapshot
     public string Symbol { get; set; } = "";
 
     public decimal Ltp { get; set; }
+
     public decimal DayOpen { get; set; }
     public decimal YesterdayClose { get; set; }
 
@@ -19,6 +20,10 @@ public class IndicatorSnapshot
     public decimal Ema50 { get; set; }
     public decimal Ema20_5m { get; set; }
     public decimal Ema50_5m { get; set; }
+
+    /// <summary>1m EMA9 / EMA21. ANALYTICS ONLY - no gate, engine or rule reads them. Null on rows written before 2026-11-04.</summary>
+    public decimal? Ema9 { get; set; }
+    public decimal? Ema21 { get; set; }
 
     public decimal Rsi { get; set; }          // 1m — drives every RSI threshold in the system
 
@@ -32,6 +37,7 @@ public class IndicatorSnapshot
     public decimal AtrRaw { get; set; }
     public decimal AtrPct { get; set; }
     public decimal Pcr { get; set; }
+    public decimal? PcrFullChain { get; set; }
     public decimal? Vwap { get; set; }   // null when volume is unavailable (Groww sends none for indices)
 
     public decimal PriceChangePct { get; set; }

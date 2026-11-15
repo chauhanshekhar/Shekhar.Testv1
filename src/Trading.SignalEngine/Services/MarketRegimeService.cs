@@ -141,6 +141,7 @@ public class MarketRegimeService
 
         const decimal BufferPercent = 0.0002m; // 0.02%
 
+
         var emaBuffer = ema50 * BufferPercent;
 
         if (ema20 > ema50 + emaBuffer &&
@@ -180,22 +181,23 @@ public class MarketRegimeService
     /// one layer later, in StrategySelectorService, where the selected strategy is known and it
     /// can be applied to Directional alone.
     /// </summary>
-    public static bool IsTradeAllowed(
-        MarketRegime regime)
+
+    public static bool IsTradeAllowed(MarketRegime regime)
     {
-
-        if (regime.Volatility == MarketVolatility.Low ||
-            regime.Volatility == MarketVolatility.Extreme)
-        {
+        // Global dead-market protection
+        if (regime.Volatility == MarketVolatility.Low)
             return false;
-        }
 
+        // Expiry-day opening protection
         if (regime.IsExpiryDay &&
-        IstClock.Now.TimeOfDay < new TimeSpan(9, 30, 0))
+            IstClock.Now.TimeOfDay < new TimeSpan(9, 30, 0))
         {
             return false;
         }
 
+        // High and Extreme volatility are evaluated
+        // by strategy-specific entry and risk filters.
         return true;
     }
+
 }

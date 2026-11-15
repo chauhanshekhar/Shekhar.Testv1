@@ -168,15 +168,37 @@ public class ExitDecisionLadderTests
     }
 
     [Fact]
-    public async Task ProtectedSl_DoesNotFireBeforeIndexTarget1()
+    public async Task ProtectedSl_DoesNotFireWhileUnarmed()
     {
+        // ProtectedSL == 0 is the real invariant: nothing has armed protection, so rule 4 must
+        // stay silent however far the premium falls.
+        //
+        // This previously asserted that ProtectedSL > 0 with IndexT1Hit == false must NOT fire.
+        // That combination used to be unreachable — condition 3 was the only writer of
+        // ProtectedSL and it always set IndexT1Hit alongside. Condition 3b (partial-T1 breakeven
+        // arm) now writes ProtectedSL on a PREMIUM touch without any index target, so rule 4 is
+        // gated on ProtectedSL alone and that combination is both reachable and required to fire.
+        // BreakevenArmTests covers the armed case.
         var signal = SingleLeg();
         signal.IndexT1Hit = false;
-        signal.ProtectedSL = 200m;   // would trigger if the IndexT1Hit guard were dropped
+        signal.ProtectedSL = 0m;
 
         var (reason, _) = await Decide(Build(), signal, triggerLtp: 90m, optionLtp: 90m);
 
         Assert.Null(reason);
+    }
+
+    [Fact]
+    public async Task ProtectedSl_FiresWhenArmedWithoutIndexTarget1()
+    {
+        // The new path: armed by the partial-T1 breakeven rule, no index target involved.
+        var signal = SingleLeg();
+        signal.IndexT1Hit = false;
+        signal.ProtectedSL = 200m;
+
+        var (reason, _) = await Decide(Build(), signal, triggerLtp: 90m, optionLtp: 90m);
+
+        Assert.Equal("PROTECTED_SL_HIT", reason);
     }
 
     [Fact]

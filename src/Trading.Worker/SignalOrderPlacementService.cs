@@ -25,6 +25,16 @@ public class SignalOrderPlacementService
         _alerts = alerts;
     }
 
+    /// <summary>
+    /// RSI stamped on the signal. Both columns hold the 5-minute RSI — the value the CALL/PUT entry
+    /// band is checked against (user decision 2026-09-30, to stop the 1m/5m mix-up in the Signals
+    /// table). RsiAtEntry is NOT NULL, so when no 5-minute RSI exists yet (fewer than 15 closed
+    /// 5-minute bars) it falls back to the 1-minute RSI and Rsi5mAtEntry stays NULL, which marks it.
+    /// The 1-minute RSI remains available in IndicatorSnapshots.Rsi.
+    /// </summary>
+    internal static (decimal RsiAtEntry, decimal? Rsi5mAtEntry) EntryRsi(MarketSnapshot market)
+        => (market.Rsi5m ?? market.Rsi, market.Rsi5m);
+
     public async Task PersistAndPlaceAsync(SignalContext ctx, MarketSnapshot market, Signal signal, string symbol, CancellationToken ct)
     {
         var maxLots = ctx.Settings.MaxLotSize;
@@ -32,12 +42,11 @@ public class SignalOrderPlacementService
             signal.Quantity = maxLots;
 
         // Capture market context at entry for journal analytics
-        signal.RsiAtEntry   = market.Rsi;
+        (signal.RsiAtEntry, signal.Rsi5mAtEntry) = EntryRsi(market);
         signal.PcrAtEntry   = market.PcrValue;
+        signal.PcrFullChainAtEntry = market.Audit?.PcrFullChain;
 
-        var entryLeg = market.OptionChain
-            .FirstOrDefault(o => o.TradingSymbol == signal.OptionSymbol
-                              || (o.StrikePrice == signal.StrikePrice && o.OptionType == signal.OptionType));
+        var entryLeg = SignalAuditService.FindEntryLeg(market.OptionChain, signal);
         signal.DeltaAtEntry      = entryLeg?.Delta      ?? 0m;
         signal.ChangeInOiAtEntry = entryLeg?.ChangeInOi ?? 0m;
         signal.AtrPctAtEntry     = market.AtrPct;

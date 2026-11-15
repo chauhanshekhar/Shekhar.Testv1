@@ -72,7 +72,9 @@ public class CallEntryGateTests
         decimal dayLow = Spot - 100m,
         decimal candleOpen = Spot - 20m,    // body 20 of range 24 = 83% >= 30, bullish
         decimal candleClose = Spot,
-        MarketState marketState = MarketState.Trend)
+        MarketState marketState = MarketState.Trend,
+        decimal? rsi5m = null,
+        decimal yesterdayClose = 0m)
     {
         var engine = SignalEngineTestFactory.Create(settings ?? Settings());
 
@@ -83,6 +85,7 @@ public class CallEntryGateTests
             ema50: ema50,
             pcr: pcr,
             rsi: rsi,
+            rsi5m: rsi5m ?? rsi,   // entry RSI is 5m; default mirrors the 1m value
             currentVolume: currentVolume,
             avgVolume20: avgVolume20,
             priceChangePct: 0.50m,
@@ -99,7 +102,8 @@ public class CallEntryGateTests
             prev5mHigh: prev5mHigh,
             dayOpen: dayOpen,
             dayLow: dayLow,
-            dayChangePct: dayChangePct);
+            dayChangePct: dayChangePct,
+            yesterdayClose: yesterdayClose);
     }
 
     // ── Baseline ────────────────────────────────────────────────────────────────────────────
@@ -144,6 +148,40 @@ public class CallEntryGateTests
         Assert.Null(r.Signal);
         Assert.Contains(r.FailureReasons, x => x.Contains("2 LTP > EMA20"));
     }
+
+    // ── 2b: EMA gap (shared with PUT: EnableEmaGapFilter, EmaGapMinPoints, EmaGapMaxPoints) ──
+
+    private static FakeStrategySettingsService Gap(bool enabled = true, decimal min = 10m) =>
+        Settings().Set("EnableEmaGapFilter", enabled ? 1 : 0).Set("EmaGapMinPoints", min);
+
+    [Fact]
+    public void EmaGap_OffByDefault_TinyGapStillAccepted()
+        => Assert.NotNull(RunCall(Settings(), ema20: Spot - 50m, ema50: Spot - 55m).Signal);   // gap 5
+
+    [Theory]
+    [InlineData(100, true)]    // gap 50
+    [InlineData(61, true)]     // gap 11
+    [InlineData(60, false)]    // gap exactly 10 -> strict >
+    [InlineData(55, false)]    // gap 5
+    public void EmaGap_On_RequiresGapAboveMinimum(int ema50Offset, bool accepted)
+    {
+        var r = RunCall(Gap(), ema20: Spot - 50m, ema50: Spot - ema50Offset);
+        Assert.Equal(accepted, r.Signal != null);
+    }
+
+    [Fact]
+    public void EmaGap_MaxBound_RejectsGapAtOrAboveMaximum()
+    {
+        var s = Gap().Set("EmaGapMaxPoints", 40m);
+        Assert.NotNull(RunCall(s, ema20: Spot - 50m, ema50: Spot - 80m).Signal);   // gap 30
+        Assert.Null(RunCall(s, ema20: Spot - 50m, ema50: Spot - 90m).Signal);      // gap 40 -> strict <
+    }
+
+    [Fact]
+    public void EmaGap_BothBoundsDeactivated_SkipsTheCheck()
+        => Assert.NotNull(RunCall(
+            Gap().SetInactive("EmaGapMinPoints").SetInactive("EmaGapMaxPoints"),
+            ema20: Spot - 50m, ema50: Spot - 55m).Signal);
 
     // ── 3 & 8: the two conditions whose inputs do not exist ─────────────────────────────────
 
@@ -232,6 +270,36 @@ public class CallEntryGateTests
         // The hazard avoided: if an inactive ceiling resolved to 0, the check would read
         // "RSI <= 0" and NO CALL could pass. A normal in-band RSI must still fire.
         Assert.NotNull(RunCall(Settings().SetInactive("CallRsiCeiling"), rsi: 65m).Signal);
+    }
+
+    [Fact]
+    public void Condition5_UsesFiveMinuteRsi_NotOneMinute()
+    {
+        // 1m RSI in band but 5m RSI out of band -> blocked; and the reverse fires.
+        var blocked = RunCall(rsi: 65m, rsi5m: 50m);
+        Assert.Null(blocked.Signal);
+        Assert.Contains(blocked.FailureReasons, x => x.Contains("5m RSI was 50.00"));
+
+        Assert.NotNull(RunCall(rsi: 20m, rsi5m: 65m).Signal);
+    }
+
+    [Fact]
+    public void Condition5_NullFiveMinuteRsi_FailsClosed()
+    {
+        var engine = SignalEngineTestFactory.Create(Settings());
+        var r = engine.GenerateSignalDetailed(
+            symbol: SignalEngineTestFactory.Symbol, ltp: Spot, ema20: Spot - 50m, ema50: Spot - 100m,
+            pcr: 1.20m, rsi: 65m, currentVolume: 0m, avgVolume20: 0m, priceChangePct: 0.50m,
+            atrPct: 0.15m, atrRaw: 30m,
+            optionChain: SignalEngineTestFactory.BuildChain(Spot),
+            strategyHint: TradingConst.StrategyType.Single,
+            lastClosedCandle: SignalEngineTestFactory.MakeCandle(
+                open: Spot - 20m, close: Spot, high: Spot + 2m, low: Spot - 22m),
+            prev5mHigh: Spot - 10m, dayOpen: Spot - 100m, dayLow: Spot - 100m, dayChangePct: 0.20m,
+            rsi5m: null);
+
+        Assert.Null(r.Signal);
+        Assert.Contains(r.FailureReasons, x => x.Contains("5m RSI was N/A"));
     }
 
     // ── 6 & 7: bullish candle with a body of at least 30% ───────────────────────────────────
@@ -365,6 +433,47 @@ public class CallEntryGateTests
         Assert.Contains(blocked.FailureReasons, x => x.Contains("12 PCR"));
 
         Assert.NotNull(RunCall(enabled, pcr: 1.10m).Signal);
+    }
+
+    [Fact]
+    public void Condition12_PcrFilterIsSkippedOnGapUpSession()
+    {
+        var enabled = Settings().Set("EnableCallPcrFilter", 1);
+        // dayOpen 19980 over previous close 19900 = +0.40% (>= 0.30%): low PCR no longer blocks.
+        var gapUp = RunCall(enabled, pcr: 0.60m, dayOpen: 19980m, yesterdayClose: 19900m);
+        Assert.NotNull(gapUp.Signal);
+        Assert.DoesNotContain(gapUp.FailureReasons, x => x.Contains("12 PCR"));
+    }
+
+    [Theory]
+    [InlineData(19930)]   // +0.15% normal open
+    [InlineData(19850)]   // gap down
+    [InlineData(0)]       // missing previous close handled below via yesterdayClose
+    public void Condition12_PcrFilterStillBlocksOnNormalOrGapDown(double dayOpen)
+    {
+        var enabled = Settings().Set("EnableCallPcrFilter", 1);
+        var result = RunCall(enabled, pcr: 0.60m, dayOpen: dayOpen == 0 ? Spot - 100m : (decimal)dayOpen, yesterdayClose: dayOpen == 0 ? 0m : 19900m);
+        Assert.Null(result.Signal);
+        Assert.Contains(result.FailureReasons, x => x.Contains("12 PCR"));
+    }
+
+    [Theory]
+    [InlineData(1.50, true)]     // the ceiling is inclusive
+    [InlineData(1.51, false)]
+    [InlineData(0.60, true)]
+    public void Condition12b_PcrCeiling_WhenCallPcrMaximumConfigured(double pcr, bool expected)
+    {
+        var result = RunCall(Settings().Set("CallPcrMaximum", 1.5m), pcr: (decimal)pcr);
+
+        Assert.Equal(expected, result.Signal != null);
+        if (!expected)
+            Assert.Contains(result.FailureReasons, x => x.Contains("12b PCR"));
+    }
+
+    [Fact]
+    public void Condition12b_PcrCeiling_IsOffWithoutTheSetting()
+    {
+        Assert.NotNull(RunCall(pcr: 3.00m).Signal);
     }
 
     // ── 13: OI change floor ─────────────────────────────────────────────────────────────────

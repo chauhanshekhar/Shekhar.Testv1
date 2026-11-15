@@ -1,0 +1,295 @@
+======================================================================================================================================================
+ACTUAL CLOSED TRADES — CALL   (n=65, snapshot matched 65, rsi5 present 44, vwap present 8, delta present 65, body present 61)
+======================================================================================================================================================
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+TOTAL                           65    27     32   6    42%     59,973     60,531        -558   0.99    18   3.61   1.50   1.78        -31
+
+[CALL] by symbol
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+BANKNIFTY                       22    13      9   0    59%     34,064     24,894       9,170   1.37     8   2.75   1.62   1.12      1,146
+NIFTY                            4     2      2   0    50%      5,210      8,021      -2,811   0.65     3   1.33   0.67   0.67       -937
+SENSEX                          39    12     21   6    31%     20,699     27,616      -6,917   0.75    13   3.00   0.92   1.62       -532
+
+[CALL] by RSI 1m (snapshot Rsi)
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+30-40                            1     0      1   0     0%          0      2,504      -2,504   0.00     1   1.00   0.00   1.00     -2,504
+50-60                           22     9     12   1    41%     22,581     21,412       1,169   1.05     9   2.44   1.00   1.33        130
+60-70                           21     9     11   1    43%     22,218     15,012       7,206   1.48    10   2.10   0.90   1.10        721
+>=70                             2     0      1   1     0%          0      2,868      -2,868   0.00     2   1.00   0.00   0.50     -1,434
+(feature NULL, excluded)        19
+
+[CALL] by RSI 5m (Rsi5mAtEntry, else snapshot Rsi5m)
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+45-55                           12     5      6   1    42%      9,607     13,860      -4,253   0.69     6   2.00   0.83   1.00       -709
+55-65                           29    12     16   1    41%     34,724     24,456      10,268   1.42     8   3.62   1.50   2.00      1,283
+>=65                             3     1      1   1    33%        468        112         356   4.18     3   1.00   0.33   0.33        119
+(feature NULL, excluded)        21
+
+[CALL] by PCR at entry
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+<0.7                             2     1      1   0    50%      2,985      2,064         921   1.45     1   2.00   1.00   1.00        921
+0.7-0.9                         12     6      5   1    50%     11,305     12,698      -1,393   0.89     5   2.40   1.20   1.00       -279
+0.9-1.1                         16     6     10   0    38%     19,856     11,436       8,420   1.74     5   3.20   1.20   2.00      1,684
+>=1.1                           35    14     16   5    40%     25,826     34,333      -8,506   0.75    15   2.33   0.93   1.07       -567
+
+[CALL] by Delta at entry (DeltaAtEntry)
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+0.45-0.55                       43    19     21   3    44%     43,464     32,588      10,876   1.33    14   3.07   1.36   1.50        777
+>=0.55                          22     8     11   3    36%     16,509     27,943     -11,434   0.59    13   1.69   0.62   0.85       -880
+
+[CALL] by PriceChangePct (day change, raw)
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+<-0.3                            4     2      2   0    50%      4,512      4,184         328   1.08     3   1.33   0.67   0.67        109
+-0.3-0                          13     4      9   0    31%      8,062     15,972      -7,910   0.50     4   3.25   1.00   2.25     -1,978
+0-0.3                           15     5      8   2    33%     10,432     12,752      -2,320   0.82     7   2.14   0.71   1.14       -331
+>=0.3                           14     7      6   1    50%     21,793      8,888      12,905   2.45     8   1.75   0.88   0.75      1,613
+(feature NULL, excluded)        19
+
+[CALL] by ATR% at entry
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+<0.03                            1     0      0   1     0%          0          0           0      -     1   1.00   0.00   0.00          0
+0.03-0.04                       22     6     14   2    27%     10,878     22,446     -11,568   0.48    13   1.69   0.46   1.08       -890
+0.04-0.05                       14     6      7   1    43%     10,803      7,844       2,959   1.38    12   1.17   0.50   0.58        247
+>=0.05                          28    15     11   2    54%     38,292     30,241       8,051   1.27    12   2.33   1.25   0.92        671
+
+[CALL] by EMA20 vs EMA50 (1m)
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+EMA20>EMA50                     45    18     24   3    40%     44,799     39,292       5,507   1.14    13   3.46   1.38   1.85        424
+EMA20<EMA50                      1     0      1   0     0%          0      2,504      -2,504   0.00     1   1.00   0.00   1.00     -2,504
+(feature NULL, excluded)        19
+
+[CALL] by EMA20 vs EMA50 (5m alignment)
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+5m EMA20>EMA50                  33    12     18   3    36%     31,214     26,010       5,204   1.20    10   3.30   1.20   1.80        520
+5m EMA20<EMA50                  13     6      7   0    46%     13,585     15,786      -2,201   0.86     6   2.17   1.00   1.17       -367
+(feature NULL, excluded)        19
+
+[CALL] by LTP vs EMA20 (direction-relative)
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+with EMA20 (>0)                 45    18     24   3    40%     44,799     39,292       5,507   1.14    13   3.46   1.38   1.85        424
+against EMA20 (<=0)              1     0      1   0     0%          0      2,504      -2,504   0.00     1   1.00   0.00   1.00     -2,504
+(feature NULL, excluded)        19
+
+[CALL] by LTP vs VWAP (direction-relative)
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+with VWAP (>0)                   5     3      2   0    60%      6,210      7,590      -1,380   0.82     2   2.50   1.50   1.00       -690
+against VWAP (<=0)               3     0      3   0     0%          0      4,776      -4,776   0.00     3   1.00   0.00   1.00     -1,592
+(feature NULL, excluded)        57
+
+[CALL] by 1m candle body % at entry
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+<0.02                           22    10     11   1    45%     21,371     18,338       3,033   1.17    12   1.83   0.83   0.92        253
+0.02-0.05                       27     8     16   3    30%     23,248     27,915      -4,666   0.83    15   1.80   0.53   1.07       -311
+0.05-0.10                        9     4      4   1    44%      5,513     10,180      -4,667   0.54     7   1.29   0.57   0.57       -667
+>=0.10                           3     2      0   1    67%      6,264          0       6,264      -     2   1.50   1.00   0.00      3,132
+(feature NULL, excluded)         4
+
+[CALL] by expiry day
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+non-expiry                      65    27     32   6    42%     59,973     60,531        -558   0.99    18   3.61   1.50   1.78        -31
+
+[CALL] by exit reason
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+PROTECTED_SL_HIT                31    20      5   6    65%     43,648        658      42,990  66.33    12   2.58   1.67   0.42      3,583
+RUNNER_EXIT                      4     4      0   0   100%      8,865          0       8,865      -     4   1.00   1.00   0.00      2,216
+OPTION_T5_HIT                    1     1      0   0   100%      4,394          0       4,394      -     1   1.00   1.00   0.00      4,394
+MANUAL_CLOSE                     3     2      1   0    67%      3,065      3,328        -263   0.92     3   1.00   0.67   0.33        -88
+INDEX_SL_HIT                     7     0      7   0     0%          0     11,197     -11,197   0.00     7   1.00   0.00   1.00     -1,600
+OPTION_SL_HIT                   19     0     19   0     0%          0     45,348     -45,348   0.00    11   1.73   0.00   1.73     -4,123
+
+[CALL] RSI5m x day change
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+55-65 | pchg >=0.3              10     5      5   0    50%     19,806      8,848      10,958   2.24     6   1.67   0.83   0.83      1,826
+55-65 | pchg 0-0.3              12     5      6   1    42%     10,432      9,312       1,120   1.12     5   2.40   1.00   1.20        224
+45-55 | pchg <-0.3               4     2      2   0    50%      4,512      4,184         328   1.08     3   1.33   0.67   0.67        109
+55-65 | pchg -0.3-0              7     2      5   0    29%      4,485      6,296      -1,811   0.71     2   3.50   1.00   2.50       -906
+45-55 | pchg -0.3-0              6     2      4   0    33%      3,577      9,676      -6,099   0.37     3   2.00   0.67   1.33     -2,033
+(feature NULL, excluded)        21
+
+[CALL] RSI5m x Delta
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+55-65 | delta 0.45-0.55         20     8     12   0    40%     24,380     15,196       9,184   1.60     6   3.33   1.33   2.00      1,531
+55-65 | delta >=0.55             9     4      4   1    44%     10,344      9,260       1,084   1.12     5   1.80   0.80   0.80        217
+45-55 | delta >=0.55             4     2      2   0    50%      4,512      6,318      -1,806   0.71     4   1.00   0.50   0.50       -452
+45-55 | delta 0.45-0.55          8     3      4   1    38%      5,095      7,542      -2,447   0.68     5   1.60   0.60   0.80       -489
+(feature NULL, excluded)        21
+
+[CALL] RSI5m x EMA20
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+55-65 | with EMA20              28    12     15   1    43%     34,724     21,952      12,772   1.58     8   3.50   1.50   1.88      1,596
+>=65 | with EMA20                3     1      1   1    33%        468        112         356   4.18     3   1.00   0.33   0.33        119
+45-55 | with EMA20              12     5      6   1    42%      9,607     13,860      -4,253   0.69     6   2.00   0.83   1.00       -709
+(feature NULL, excluded)        21
+
+[CALL] by day
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+2026-08-06                       1     0      1   0     0%          0      3,328      -3,328   0.00     1   1.00   0.00   1.00     -3,328
+2026-08-12                       1     0      1   0     0%          0         40         -40   0.00     1   1.00   0.00   1.00        -40
+2026-08-26                       1     0      0   1     0%          0          0           0      -     1   1.00   0.00   0.00          0
+2026-08-31                       4     1      2   1    25%      1,186      4,304      -3,118   0.28     1   4.00   1.00   2.00     -3,118
+2026-09-03                       3     1      2   0    33%      2,985      2,312         673   1.29     1   3.00   1.00   2.00        673
+2026-09-11                       2     1      1   0    50%      2,701      3,614        -913   0.75     1   2.00   1.00   1.00       -913
+2026-09-16                       3     2      1   0    67%      2,995      4,407      -1,412   0.68     1   3.00   2.00   1.00     -1,412
+2026-09-17                       3     1      0   2    33%      1,731          0       1,731      -     1   3.00   1.00   0.00      1,731
+2026-09-25                       7     5      2   0    71%      4,552      5,834      -1,282   0.78     1   7.00   5.00   2.00     -1,282
+2026-09-29                       1     1      0   0   100%      2,826          0       2,826      -     1   1.00   1.00   0.00      2,826
+2026-09-30                       5     2      1   2    40%      5,912      2,504       3,408   2.36     1   5.00   2.00   1.00      3,408
+2026-10-01                       2     1      1   0    50%      4,768      2,868       1,900   1.66     1   2.00   1.00   1.00      1,900
+2026-10-05                       8     3      5   0    38%      9,369      2,816       6,553   3.33     1   8.00   3.00   5.00      6,553
+2026-10-06                       4     1      3   0    25%      1,962      5,968      -4,006   0.33     1   4.00   1.00   3.00     -4,006
+2026-10-07                      14     5      9   0    36%     12,775     13,538        -763   0.94     1  14.00   5.00   9.00       -763
+2026-10-14                       1     0      1   0     0%          0      1,408      -1,408   0.00     1   1.00   0.00   1.00     -1,408
+2026-10-16                       3     2      1   0    67%      5,496      3,600       1,896   1.53     1   3.00   2.00   1.00      1,896
+2026-10-19                       2     1      1   0    50%        714      3,990      -3,276   0.18     1   2.00   1.00   1.00     -3,276
+======================================================================================================================================================
+ACTUAL CLOSED TRADES — PUT   (n=119, snapshot matched 119, rsi5 present 100, vwap present 30, delta present 119, body present 118)
+======================================================================================================================================================
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+TOTAL                          119    55     59   5    46%    115,287     95,104      20,183   1.21    24   4.96   2.29   2.46        841
+
+[PUT] by symbol
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+SENSEX                          62    27     32   3    44%     53,669     32,640      21,029   1.64    13   4.77   2.08   2.46      1,618
+BANKNIFTY                       52    26     24   2    50%     56,711     53,910       2,801   1.05    20   2.60   1.30   1.20        140
+NIFTY                            5     2      3   0    40%      4,908      8,554      -3,646   0.57     3   1.67   0.67   1.00     -1,216
+
+[PUT] by RSI 1m (snapshot Rsi)
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+<30                              9     5      4   0    56%     11,735      8,466       3,269   1.39     5   1.80   1.00   0.80        654
+30-40                           51    27     22   2    53%     64,055     41,250      22,805   1.55    15   3.40   1.80   1.47      1,520
+40-50                           45    16     29   0    36%     29,760     40,204     -10,444   0.74     8   5.62   2.00   3.62     -1,306
+(feature NULL, excluded)        14
+
+[PUT] by RSI 5m (Rsi5mAtEntry, else snapshot Rsi5m)
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+<30                             11     4      7   0    36%      9,143      7,968       1,175   1.15     6   1.83   0.67   1.17        196
+30-38                           79    37     41   1    47%     80,180     70,498       9,682   1.14    12   6.58   3.08   3.42        807
+38-45                            8     3      4   1    38%      5,337      6,186        -849   0.86     6   1.33   0.50   0.67       -141
+45-55                            2     1      1   0    50%      2,127      1,476         651   1.44     2   1.00   0.50   0.50        326
+(feature NULL, excluded)        19
+
+[PUT] by PCR at entry
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+<0.7                             2     2      0   0   100%      6,057          0       6,057      -     2   1.00   1.00   0.00      3,028
+0.7-0.9                         25    12     11   2    48%     28,441     13,982      14,459   2.03    13   1.92   0.92   0.85      1,112
+0.9-1.1                         38    20     17   1    53%     40,925     27,502      13,423   1.49    13   2.92   1.54   1.31      1,033
+>=1.1                           54    21     31   2    39%     39,864     53,620     -13,756   0.74    13   4.15   1.62   2.38     -1,058
+
+[PUT] by Delta at entry (DeltaAtEntry)
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+0.35-0.45                       23    15      7   1    65%     30,833     17,030      13,803   1.81    13   1.77   1.15   0.54      1,062
+0.45-0.55                       92    37     51   4    40%     80,760     75,870       4,890   1.06    18   5.11   2.06   2.83        272
+>=0.55                           4     3      1   0    75%      3,694      2,204       1,490   1.68     2   2.00   1.50   0.50        745
+
+[PUT] by PriceChangePct (day change, raw)
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+<-0.3                           83    35     47   1    42%     78,880     72,868       6,012   1.08    12   6.92   2.92   3.92        501
+-0.3-0                          13     8      5   0    62%     15,367     12,284       3,083   1.25     9   1.44   0.89   0.56        343
+0-0.3                            6     3      3   0    50%      5,000      4,768         232   1.05     4   1.50   0.75   0.75         58
+>=0.3                            3     2      0   1    67%      6,302          0       6,302      -     1   3.00   2.00   0.00      6,302
+(feature NULL, excluded)        14
+
+[PUT] by ATR% at entry
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+<0.03                            3     1      2   0    33%         64      3,584      -3,520   0.02     2   1.50   0.50   1.00     -1,760
+0.03-0.04                       31    17     11   3    55%     28,032     12,440      15,592   2.25    15   2.07   1.13   0.73      1,039
+0.04-0.05                       31    17     14   0    55%     32,400     13,948      18,452   2.32    11   2.82   1.55   1.27      1,677
+>=0.05                          54    20     32   2    37%     54,791     65,132     -10,341   0.84    13   4.15   1.54   2.46       -795
+
+[PUT] by EMA20 vs EMA50 (1m)
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+EMA20<EMA50                    105    48     55   2    46%    105,550     89,920      15,630   1.17    15   7.00   3.20   3.67      1,042
+(feature NULL, excluded)        14
+
+[PUT] by EMA20 vs EMA50 (5m alignment)
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+5m EMA20<EMA50                 103    46     55   2    45%    103,402     89,920      13,482   1.15    14   7.36   3.29   3.93        963
+5m EMA20>EMA50                   2     2      0   0   100%      2,148          0       2,148      -     2   1.00   1.00   0.00      1,074
+(feature NULL, excluded)        14
+
+[PUT] by LTP vs EMA20 (direction-relative)
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+with EMA20 (>0)                105    48     55   2    46%    105,550     89,920      15,630   1.17    15   7.00   3.20   3.67      1,042
+(feature NULL, excluded)        14
+
+[PUT] by LTP vs VWAP (direction-relative)
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+against VWAP (<=0)               3     1      2   0    33%      2,706      3,792      -1,086   0.71     2   1.50   0.50   1.00       -543
+with VWAP (>0)                  27    12     15   0    44%     17,785     20,616      -2,831   0.86     4   6.75   3.00   3.75       -708
+(feature NULL, excluded)        89
+
+[PUT] by 1m candle body % at entry
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+<0.02                           54    24     27   3    44%     45,096     35,928       9,168   1.26    19   2.84   1.26   1.42        483
+0.02-0.05                       45    23     21   1    51%     45,834     41,456       4,378   1.11    14   3.21   1.64   1.50        313
+0.05-0.10                       14     5      9   0    36%     13,684     12,336       1,348   1.11     6   2.33   0.83   1.50        225
+>=0.10                           5     3      2   0    60%     10,673      5,384       5,289   1.98     5   1.00   0.60   0.40      1,058
+(feature NULL, excluded)         1
+
+[PUT] by expiry day
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+non-expiry                     119    55     59   5    46%    115,287     95,104      20,183   1.21    24   4.96   2.29   2.46        841
+
+[PUT] by exit reason
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+PROTECTED_SL_HIT                60    37     18   5    62%     62,224      5,318      56,906  11.70    16   3.75   2.31   1.12      3,557
+RUNNER_EXIT                      6     6      0   0   100%     16,154          0      16,154      -     4   1.50   1.50   0.00      4,038
+TRAILING_SL_HIT                  5     5      0   0   100%     15,762          0      15,762      -     4   1.25   1.25   0.00      3,940
+OPTION_T5_HIT                    3     3      0   0   100%     15,201          0      15,201      -     3   1.00   1.00   0.00      5,067
+FORCE_EXIT_EOD                   2     2      0   0   100%      4,339          0       4,339      -     2   1.00   1.00   0.00      2,169
+MANUAL_CLOSE                     1     0      1   0     0%          0      1,962      -1,962   0.00     1   1.00   0.00   1.00     -1,962
+INDEX_SL_HIT                    12     2     10   0    17%      1,608     19,412     -17,804   0.08     7   1.71   0.29   1.43     -2,543
+OPTION_SL_HIT                   30     0     30   0     0%          0     68,412     -68,412   0.00    13   2.31   0.00   2.31     -5,262
+
+[PUT] RSI5m x day change
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+30-38 | pchg >=0.3               3     2      0   1    67%      6,302          0       6,302      -     1   3.00   2.00   0.00      6,302
+30-38 | pchg <-0.3              61    27     34   0    44%     59,598     55,226       4,372   1.08     9   6.78   3.00   3.78        486
+30-38 | pchg -0.3-0             10     6      4   0    60%     11,665     10,504       1,161   1.11     9   1.11   0.67   0.44        129
+<30 | pchg <-0.3                 9     3      6   0    33%      7,222      6,188       1,034   1.17     4   2.25   0.75   1.50        259
+30-38 | pchg 0-0.3               5     2      3   0    40%      2,615      4,768      -2,153   0.55     3   1.67   0.67   1.00       -718
+38-45 | pchg <-0.3               6     1      4   1    17%      1,170      6,186      -5,016   0.19     4   1.50   0.25   1.00     -1,254
+(feature NULL, excluded)        19
+
+[PUT] RSI5m x Delta
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+30-38 | delta 0.35-0.45         13     8      5   0    62%     21,096     13,800       7,296   1.53     6   2.17   1.33   0.83      1,216
+30-38 | delta >=0.55             4     3      1   0    75%      3,694      2,204       1,490   1.68     2   2.00   1.50   0.50        745
+<30 | delta 0.45-0.55           11     4      7   0    36%      9,143      7,968       1,175   1.15     6   1.83   0.67   1.17        196
+30-38 | delta 0.45-0.55         62    26     35   1    42%     55,390     54,494         896   1.02    10   6.20   2.60   3.50         90
+38-45 | delta 0.45-0.55          8     3      4   1    38%      5,337      6,186        -849   0.86     6   1.33   0.50   0.67       -141
+(feature NULL, excluded)        19
+
+[PUT] RSI5m x EMA20
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+30-38 | with EMA20              79    37     41   1    47%     80,180     70,498       9,682   1.14    12   6.58   3.08   3.42        807
+<30 | with EMA20                11     4      7   0    36%      9,143      7,968       1,175   1.15     6   1.83   0.67   1.17        196
+38-45 | with EMA20               8     3      4   1    38%      5,337      6,186        -849   0.86     6   1.33   0.50   0.67       -141
+(feature NULL, excluded)        19
+
+[PUT] by day
+bucket                      Trades  Wins Losses  BE   Win%     Profit       Loss         Net     PF  Days  T/day  W/day  L/day    Net/day
+2026-08-04                       1     1      0   0   100%      3,419          0       3,419      -     1   1.00   1.00   0.00      3,419
+2026-08-05                       3     2      1   0    67%      5,344      2,296       3,048   2.33     1   3.00   2.00   1.00      3,048
+2026-08-12                       1     0      1   0     0%          0      1,496      -1,496   0.00     1   1.00   0.00   1.00     -1,496
+2026-08-20                       1     1      0   0   100%        936          0         936      -     1   1.00   1.00   0.00        936
+2026-08-24                       1     0      1   0     0%          0      1,962      -1,962   0.00     1   1.00   0.00   1.00     -1,962
+2026-08-25                       1     1      0   0   100%      3,870          0       3,870      -     1   1.00   1.00   0.00      3,870
+2026-08-26                       1     1      0   0   100%        552          0         552      -     1   1.00   1.00   0.00        552
+2026-08-27                       1     1      0   0   100%      3,085          0       3,085      -     1   1.00   1.00   0.00      3,085
+2026-08-31                       2     1      1   0    50%         64      1,288      -1,224   0.05     1   2.00   1.00   1.00     -1,224
+2026-09-01                       1     0      0   1     0%          0          0           0      -     1   1.00   0.00   0.00          0
+2026-09-03                       5     2      2   1    40%      1,230      1,934        -704   0.64     1   5.00   2.00   2.00       -704
+2026-09-24                       3     2      1   0    67%      4,306      1,544       2,762   2.79     1   3.00   2.00   1.00      2,762
+2026-09-25                       1     0      0   1     0%          0          0           0      -     1   1.00   0.00   0.00          0
+2026-09-29                       4     2      1   1    50%      1,698      3,588      -1,890   0.47     1   4.00   2.00   1.00     -1,890
+2026-09-30                       5     4      0   1    80%     12,128          0      12,128      -     1   5.00   4.00   0.00     12,128
+2026-10-01                      16     6     10   0    38%     20,635     17,668       2,967   1.17     1  16.00   6.00  10.00      2,967
+2026-10-05                       4     2      2   0    50%      6,078      6,996        -918   0.87     1   4.00   2.00   2.00       -918
+2026-10-06                       1     1      0   0   100%        192          0         192      -     1   1.00   1.00   0.00        192
+2026-10-07                      11     4      7   0    36%      8,608     14,790      -6,182   0.58     1  11.00   4.00   7.00     -6,182
+2026-10-08                      29    12     17   0    41%     25,358     20,926       4,432   1.21     1  29.00  12.00  17.00      4,432
+2026-10-12                       7     5      2   0    71%      6,072      3,662       2,410   1.66     1   7.00   5.00   2.00      2,410
+2026-10-14                       3     1      2   0    33%      1,956      3,504      -1,548   0.56     1   3.00   1.00   2.00     -1,548
+2026-10-16                       3     0      3   0     0%          0      5,730      -5,730   0.00     1   3.00   0.00   3.00     -5,730
+2026-10-19                      14     6      8   0    43%      9,757      7,720       2,037   1.26     1  14.00   6.00   8.00      2,037

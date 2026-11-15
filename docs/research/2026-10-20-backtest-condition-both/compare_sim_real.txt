@@ -1,0 +1,47 @@
+Period 2026-10-08..; simulated trades 66, real trades 62
+matched 28 | simulated-only 38 | real-only 34
+
+SIM net (costed) 43,174  gross 63,434  costs 20,260
+REAL net (journal, no costs) -1,188
+GAP (sim - real) = 44,362
+
+Decomposition of the gap (simulated minus real):
+  1. simulated trades with no live match       34,694   (n=38)
+  2. real trades with no simulated match       11,936   (n=34; sign flipped = real P&L not in sim)
+  3. matched trades, costs the sim charges     -7,780   (real journal charges none)
+  4. matched trades, gross P&L difference       5,512   (entry fill + exit behaviour + settings; n=28)
+     check: 44,362 vs gap 44,362
+
+Why simulated-only trades did not happen live:
+  a real position (any symbol/side) was open: 4 trades, sim net 6,359
+  no real position open: live gates/settings/data blocked it: 34 trades, sim net 28,335
+
+By side and symbol (matched / sim-only / real-only: n and P&L):
+                   matched n   sim P&L  real P&L     diff | sim-only n      net | real-only n      net
+  CALL BANKNIFTY           1     2,599       714    1,885 |          4    8,469 |           4   -2,094
+  CALL NIFTY/BANKNIFTY         0         0         0        0 |          1    7,159 |           0        0
+  CALL SENSEX              1    -1,247    -1,408      161 |          2   -2,662 |           0        0
+  PUT ?                    0         0         0        0 |          4    7,592 |           0        0
+  PUT BANKNIFTY            6     1,036     4,155   -3,119 |          7   -2,879 |          14  -13,425
+  PUT BANKNIFTY/SENSEX         0         0         0        0 |          2    2,877 |           0        0
+  PUT NIFTY                0         0         0        0 |          0        0 |           2      982
+  PUT SENSEX              20    13,871     7,287    6,584 |         18   14,138 |          14    2,602
+
+Matched pairs: exit reason agreement and entry fill vs signal price
+  same exit reason: 16 of 28
+    sim OPTION_SL_HIT vs real PROTECTED_SL_HIT: 5
+    sim TRAILING_SL_HIT vs real PROTECTED_SL_HIT: 3
+    sim PROTECTED_SL_HIT vs real OPTION_SL_HIT: 3
+    sim OPTION_SL_HIT vs real INDEX_SL_HIT: 1
+  real entry fill - signal price: nonzero in 0 of 28 (paper fills at the quote)
+  premium source in matched sim trades: {'IndexDeltaModel': 4, 'OptionMinuteHistory': 24}
+
+Worst matched differences (sim gross - real P&L):
+  10-08 13:07 PUT SENSEX    sim    1,874 (PROTECTED_SL_HIT) vs real   -1,644 (OPTION_SL_HIT) id 186
+  10-19 12:36 PUT SENSEX    sim    1,276 (PROTECTED_SL_HIT) vs real   -1,548 (OPTION_SL_HIT) id 226
+  10-16 10:50 PUT BANKNIFTY sim    2,338 (PROTECTED_SL_HIT) vs real     -354 (PROTECTED_SL_HIT) id 212
+  10-19 12:11 PUT SENSEX    sim    2,102 (PROTECTED_SL_HIT) vs real      -16 (PROTECTED_SL_HIT) id 223
+  10-08 12:07 PUT SENSEX    sim        0 (PROTECTED_SL_HIT) vs real   -2,032 (OPTION_SL_HIT) id 178
+  10-19 10:57 CALL BANKNIFTY sim    2,599 (PROTECTED_SL_HIT) vs real      714 (PROTECTED_SL_HIT) id 218
+  10-08 11:00 PUT SENSEX    sim    1,268 (PROTECTED_SL_HIT) vs real     -548 (PROTECTED_SL_HIT) id 171
+  10-19 11:58 PUT SENSEX    sim    3,587 (TRAILING_SL_HIT) vs real    2,074 (PROTECTED_SL_HIT) id 222

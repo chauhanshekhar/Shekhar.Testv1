@@ -101,6 +101,9 @@ public class BrokerPositionSyncWorker : BackgroundService
      s.Status == SignalStatus.ExitPending ||
      s.Status == SignalStatus.PartialExitPending
  ));
+        // Paper signals (incl. Scalping-state ones in Live mode) never exist at the broker: reconciling
+        // them would reject pending ones and raise "no broker position" alerts.
+        dbSignals = dbSignals.Where(s => !orders.IsPaperSignal(s)).ToList();
         if (dbSignals.Count == 0) return;
 
         // Fetch live broker positions
@@ -348,7 +351,8 @@ public class BrokerPositionSyncWorker : BackgroundService
               && s.OptionSL > 0
               && s.StopLossOrderId == "");
 
-        foreach (var signal in unprotected.Where(s => TradingConst.IsSingleLegStrategy(s.StrategyType)))
+        foreach (var signal in unprotected.Where(s => TradingConst.IsSingleLegStrategy(s.StrategyType)
+                                                       && !orders.IsPaperSignal(s)))
         {
             _logger.LogWarning(
                 "Recovering missing SL_M for signal {Id} {Symbol} (StopLossStatus={Status}, RetryCount={Retries}) — likely a restart/crash gap",

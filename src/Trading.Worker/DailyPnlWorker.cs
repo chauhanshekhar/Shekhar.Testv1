@@ -85,11 +85,15 @@ public class DailyPnlWorker : BackgroundService
         var openTrades = await paperRepo.FindAsync(p => p.Status == "OPEN");
         var unrealizedPnl = 0m;
 
-        var tickCutoff  = IstClock.Now.AddMinutes(-5);
-        var recentTicks = await tickRepo.FindAsync(t => t.TickTime >= tickCutoff);
-        var ltpBySymbol = recentTicks
-            .GroupBy(t => t.Symbol)
-            .ToDictionary(g => g.Key, g => g.OrderByDescending(t => t.TickTime).First().LastPrice);
+        // Only the symbols the loop below looks up, one index seek each (a TickTime-only filter
+        // scans all of MarketTicks and deadlocks with the per-second tick insert).
+        var ltpBySymbol = await tickRepo.LatestPricesAsync(
+            openTrades.SelectMany(p => new[]
+            {
+                !string.IsNullOrEmpty(p.OptionSymbol) ? p.OptionSymbol : p.Symbol,
+                p.Leg2OptionSymbol,
+            }),
+            IstClock.Now.AddMinutes(-5));
 
         // Fallback source when no recent MarketTick exists — latest OptionChain snapshot LTP.
         var chainSnapshotCutoff = IstClock.Now.AddMinutes(-5);

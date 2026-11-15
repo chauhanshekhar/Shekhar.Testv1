@@ -1,0 +1,383 @@
+diff --git a/src/Trading.Backtest/Configurations/BacktestConfiguration.cs b/src/Trading.Backtest/Configurations/BacktestConfiguration.cs
+index b9f9ff8..bfa5bb1 100644
+--- a/src/Trading.Backtest/Configurations/BacktestConfiguration.cs
++++ b/src/Trading.Backtest/Configurations/BacktestConfiguration.cs
+@@ -17,14 +17,14 @@ public sealed record SettingChange(string Key, string? Symbol, SettingChangeKind
+ /// live settings. It never writes anywhere; the live snapshot passed to <see cref="Apply"/> is left untouched.
+ /// </summary>
+ /// <summary>How many positions a configuration may hold at once, and whether the cap is per symbol.</summary>
+-public sealed record SlotRules(int MaxConcurrent = 1, bool PerSymbol = false, bool NoHandoffCooldown = false);
++public sealed record SlotRules(int MaxConcurrent = 1, bool PerSymbol = false, bool NoHandoffCooldown = false, bool SharedBothSides = false);
+ 
+ /// <summary>Control-arm sampling: keep only every Nth valid entry (no market information).</summary>
+ public sealed record SamplingRules(int KeepEveryNth = 1, int? MaxTradesPerSymbolDay = null);
+ 
+ public sealed record BacktestConfiguration(string Name, TradeSide Side, string Description, IReadOnlyList<SettingChange> Changes, EntryRules? Rules = null, SlotRules? Slots = null, SamplingRules? Sampling = null)
+ {
+-    public string TradeType => Side == TradeSide.Call ? "CALL" : "PUT";
++    public string TradeType => Slots?.SharedBothSides == true ? "BOTH" : Side == TradeSide.Call ? "CALL" : "PUT";
+ 
+     public BacktestSettings Apply(BacktestSettings live)
+     {
+@@ -630,6 +630,15 @@ public static class ConfigurationCatalog
+         ];
+     }
+ 
++    /// <summary>
++    /// Diagnostic: the live rules with CALL and PUT sharing ONE position slot and shared cooldowns (production's OnePositionGate),
++    /// the closest the replay gets to live occupancy. Compare with the per-side runs, which let a CALL and a PUT overlap.
++    /// </summary>
++    public static IReadOnlyList<BacktestConfiguration> BuildSharedSlot() =>
++    [
++        new("BOTH|SharedSlot", TradeSide.Call, "live rules, CALL and PUT share one position slot", [], null, new SlotRules(SharedBothSides: true)),
++    ];
++
+     public static IReadOnlyList<BacktestConfiguration> BuildThinningControl(TradeSide side)
+     {
+         var tag = side == TradeSide.Call ? "CALL" : "PUT";
+diff --git a/src/Trading.Backtest/Program.cs b/src/Trading.Backtest/Program.cs
+index ea0a05a..ef06cf2 100644
+--- a/src/Trading.Backtest/Program.cs
++++ b/src/Trading.Backtest/Program.cs
+@@ -128,6 +128,23 @@ internal static class Program
+                 },
+             };
+ 
++        // --signal-log: one row per signal minute (ENTERED or the gate that rejected it, what held it and until when).
++        var signalLines = new List<string> { "Configuration,Scope,TimeIst,Symbol,Side,Path,Outcome,OpenSymbol,HeldUntilIst,ExitIst,ExitReason,PnlRs,CostRs" };
++        if (o.Has("signal-log"))
++        {
++            var previous = runOptions.OnResult;
++            runOptions = runOptions with
++            {
++                LogSignals = true,
++                OnResult = (cfg, symbol, result) =>
++                {
++                    previous?.Invoke(cfg, symbol, result);
++                    foreach (var r in result.Log)
++                        signalLines.Add($"{cfg.Name},{symbol},{r.TimeIst:yyyy-MM-dd HH:mm},{r.Symbol},{r.Side},{r.Path},{r.Outcome},{r.OpenSymbol},{r.HeldUntilIst:yyyy-MM-dd HH:mm},{r.ExitIst:yyyy-MM-dd HH:mm},{r.ExitReason},{r.PnlRs:0.##},{r.CostRs:0.##}");
++                },
++            };
++        }
++
+         // Session day types (REPORTING ONLY - computed from completed sessions, see SessionClassifier).
+         if (o.Has("day-types"))
+         {
+@@ -159,6 +176,8 @@ internal static class Program
+         GridWriter.WriteCsv(Path.Combine(outDir, "grid.csv"), rows);
+         if (o.Has("dump-trades"))
+             File.WriteAllLines(Path.Combine(outDir, "trades.csv"), tradeLines);
++        if (o.Has("signal-log"))
++            File.WriteAllLines(Path.Combine(outDir, "signals.csv"), signalLines);
+         var assumptions = $"Stop model {runOptions.StopModel}; premium {runOptions.PremiumMode} (real option prices exist from 2026-10-07 only, earlier trades use index move x average delta); " +
+                           $"selector {runOptions.SelectorMode}; costs {(runOptions.Costs is null ? "NOT modelled (NetProfitAfterCosts = NULL)" : "modelled")}; settings = current StrategySettings applied to every day; " +
+                           "bar-close granularity (stops are checked at 1m closes); not replayed: KillSwitch, EventBlackout, StaleData, MarketRegime, Risk, RiskReward, Spread, StaleEntry (ideal data).";
+@@ -182,6 +201,7 @@ internal static class Program
+         : o.Has("base-rate") ? ConfigurationCatalog.BuildBaseRate(s)
+         : o.Has("efficiency-sweep") ? ConfigurationCatalog.BuildEfficiencySweep(s, grid)
+         : o.Has("stretch-by-opening") ? ConfigurationCatalog.BuildStretchByOpening(s, grid)
++        : o.Has("shared-slot") ? ConfigurationCatalog.BuildSharedSlot()
+         : o.Has("slot-sweep") ? ConfigurationCatalog.BuildSlotSweep(s)
+         : o.Has("stretch-sweep") ? ConfigurationCatalog.BuildStretchSweep(s, grid)
+         : o.Has("opening-types") ? ConfigurationCatalog.BuildOpeningTypes(s, grid)
+diff --git a/src/Trading.Backtest/Reporting/GridRunner.cs b/src/Trading.Backtest/Reporting/GridRunner.cs
+index 102ba94..e219523 100644
+--- a/src/Trading.Backtest/Reporting/GridRunner.cs
++++ b/src/Trading.Backtest/Reporting/GridRunner.cs
+@@ -21,7 +21,8 @@ public sealed record GridRunOptions(
+     SelectorMode SelectorMode = SelectorMode.Ignore,
+     CostModel? Costs = null,
+     int MinTradesPerPeriod = 15,
+-    Action<BacktestConfiguration, string, SimulationResult>? OnResult = null);
++    Action<BacktestConfiguration, string, SimulationResult>? OnResult = null,
++    bool LogSignals = false);
+ 
+ /// <summary>Runs every configuration on every symbol alone and on all symbols together, then splits each result by period.</summary>
+ public sealed class GridRunner
+@@ -58,7 +59,9 @@ public sealed class GridRunner
+                 MaxConcurrentPositions: config.Slots?.MaxConcurrent ?? 1,
+                 PerSymbolSlots: config.Slots?.PerSymbol ?? false,
+                 DisableHandoffCooldown: config.Slots?.NoHandoffCooldown ?? false,
+-                KeepEveryNth: config.Sampling?.KeepEveryNth);
++                KeepEveryNth: config.Sampling?.KeepEveryNth,
++                BothSides: config.Slots?.SharedBothSides ?? false,
++                LogSignals: opt.LogSignals);
+ 
+             foreach (var symbol in data.Select(d => d.Symbol).Append("ALL"))
+             {
+diff --git a/src/Trading.Backtest/Simulation/ExecutionSimulator.cs b/src/Trading.Backtest/Simulation/ExecutionSimulator.cs
+index a7f8c64..43b685f 100644
+--- a/src/Trading.Backtest/Simulation/ExecutionSimulator.cs
++++ b/src/Trading.Backtest/Simulation/ExecutionSimulator.cs
+@@ -42,11 +42,26 @@ public sealed record SimulationOptions(
+     /// CONTROL ARM. Take only every Nth otherwise-valid entry. Deterministic and carries no market
+     /// information, so it isolates how much of a filter's benefit is just "fewer trades, fewer costs".
+     /// </summary>
+-    int? KeepEveryNth = null);
++    int? KeepEveryNth = null,
++    /// <summary>
++    /// DIAGNOSTIC. Evaluate CALL and PUT on every decision minute against ONE shared position slot and shared cooldowns,
++    /// as production does (OnePositionGate counts a CALL and a PUT together). When both sides qualify on the same minute
++    /// CALL is tried first; production ranks by confidence, which the replay does not model.
++    /// </summary>
++    bool BothSides = false,
++    /// <summary>DIAGNOSTIC. Record one row per signal minute (accepted or rejected, what held it, when it frees up) in SimulationResult.Log.</summary>
++    bool LogSignals = false);
++
++/// <summary>One signal minute and what happened to it (only filled when LogSignals is on).</summary>
++public sealed record SignalLogRow(
++    DateTime TimeIst, string Symbol, string Side, string Path, string Outcome,
++    string OpenSymbol, DateTime? HeldUntilIst, DateTime? ExitIst, string ExitReason, double? PnlRs, double? CostRs);
+ 
+ public sealed class SimulationResult
+ {
+     public List<Trade> Trades { get; } = [];
++    /// <summary>Per-signal log (LogSignals only): ENTERED, or the gate that rejected it; HeldUntilIst = when the position/cooldown that blocked it ends.</summary>
++    public List<SignalLogRow> Log { get; } = [];
+     /// <summary>Minutes where the CALL/PUT chain (or the approved rule) produced a signal, before any gate.</summary>
+     public int TotalSignals { get; set; }
+     /// <summary>Signal minutes stopped by a gate, by gate name. Invariant: TotalSignals = BlockedCount + Trades.Count.</summary>
+@@ -83,7 +98,7 @@ public sealed class ExecutionSimulator
+     public SimulationResult Run(IReadOnlyList<SymbolData> data, SimulationOptions opt)
+     {
+         var result = new SimulationResult();
+-        var signalType = opt.Side == TradeSide.Call ? TradingConst.SignalType.CALL : TradingConst.SignalType.PUT;
++        var sides = opt.BothSides ? new[] { TradeSide.Call, TradeSide.Put } : new[] { opt.Side };
+ 
+         var timeline = data
+             .SelectMany((d, di) => d.Points.Select(p => (Point: p, Data: d, Order: di)))
+@@ -100,8 +115,19 @@ public sealed class ExecutionSimulator
+         var validEntrySeen = 0;   // for KeepEveryNth
+ 
+         foreach (var (p, d, _) in timeline)
++        foreach (var side in sides)
+         {
+-            var verdict = _entry.Evaluate(p, opt.Side);
++            var signalType = side == TradeSide.Call ? TradingConst.SignalType.CALL : TradingConst.SignalType.PUT;
++            var verdict = _entry.Evaluate(p, side);
++
++            // Rejection = the usual blocked counter plus (optionally) a log row naming what held the signal.
++            void Rej(string gate, DateTime? heldUntilUtc = null, string openSymbol = "")
++            {
++                Block(result, gate);
++                if (opt.LogSignals)
++                    result.Log.Add(new SignalLogRow(p.TimeIst, p.Symbol, side.ToString().ToUpperInvariant(), verdict.Path, gate,
++                        openSymbol, heldUntilUtc + SessionClock.IstOffset, null, "", null, null));
++            }
+             if (!verdict.SignalProduced)
+             {
+                 if (verdict.BlockedBy?.StartsWith("DataUnavailable", StringComparison.Ordinal) == true)
+@@ -112,7 +138,7 @@ public sealed class ExecutionSimulator
+             result.TotalSignals++;
+             if (!verdict.Candidate)
+             {
+-                Block(result, verdict.BlockedBy!);
++                Rej(verdict.BlockedBy!);
+                 continue;
+             }
+ 
+@@ -121,7 +147,7 @@ public sealed class ExecutionSimulator
+ 
+             if (opt.MaxTradesPerSymbolDay is { } cap && tradesPerSymbolDay.GetValueOrDefault((symbol, p.TimeIst.Date)) >= cap)
+             {
+-                Block(result, "MaxTradesPerSymbolDay");
++                Rej("MaxTradesPerSymbolDay");
+                 continue;
+             }
+ 
+@@ -133,7 +159,7 @@ public sealed class ExecutionSimulator
+                 : open.Count;
+             if (inUse >= opt.MaxConcurrentPositions)
+             {
+-                Block(result, "OnePositionGate");
++                Rej("OnePositionGate", open.Min(o => o.ExitUtc), string.Join('+', open.Select(o => o.Symbol)));
+                 continue;
+             }
+ 
+@@ -141,10 +167,10 @@ public sealed class ExecutionSimulator
+             if (_settings.GetBool("EnableOiConfirmationGate", symbol, true) && _options is not null)
+             {
+                 var prevClose = p.NextBarIndex >= 2 ? d.Bars[p.NextBarIndex - 2].Close : p.LastClosedBar.Close;
+-                var confirms = _options.OiConfirms(symbol, opt.Side, nowIst, d.StrikeInterval, p.LastClosedBar.Close - prevClose);
++                var confirms = _options.OiConfirms(symbol, side, nowIst, d.StrikeInterval, p.LastClosedBar.Close - prevClose);
+                 if (confirms is false)
+                 {
+-                    Block(result, "OiConfirmationGate");
++                    Rej("OiConfirmationGate");
+                     continue;
+                 }
+                 if (confirms is null)
+@@ -156,16 +182,16 @@ public sealed class ExecutionSimulator
+             }
+ 
+             // DuplicateSignalGate: rejected-entry cooldown, then 5 minutes after a close of the same symbol and direction
+-            var key = symbol;
++            var key = $"{symbol}|{side}";   // DuplicateSignalGate is per symbol AND direction
+             var rejectedCooldown = _settings.GetInt("RejectedEntryCooldownMinutes", symbol, 5);
+             if (rejectedCooldown > 0 && rejectedAt.TryGetValue(key, out var rej) && p.TimeUtc - rej < TimeSpan.FromMinutes(rejectedCooldown))
+             {
+-                Block(result, "DuplicateSignalGate");
++                Rej("DuplicateSignalGate", rej + TimeSpan.FromMinutes(rejectedCooldown));
+                 continue;
+             }
+             if (lastExitSameSide.TryGetValue(key, out var lastClose) && p.TimeUtc - lastClose < TimeSpan.FromMinutes(5))
+             {
+-                Block(result, "DuplicateSignalGate");
++                Rej("DuplicateSignalGate", lastClose + TimeSpan.FromMinutes(5));
+                 continue;
+             }
+ 
+@@ -176,7 +202,7 @@ public sealed class ExecutionSimulator
+                 if (minutes > 0 && lastExitAny is { } le
+                     && HandoffCooldownGate.Evaluate(signalType, le.Symbol, le.Utc + SessionClock.IstOffset, le.Reason, nowIst, minutes) is not null)
+                 {
+-                    Block(result, "HandoffCooldownGate");
++                    Rej("HandoffCooldownGate", le.Utc + TimeSpan.FromMinutes(minutes));
+                     continue;
+                 }
+             }
+@@ -185,7 +211,7 @@ public sealed class ExecutionSimulator
+             if (opt.RejectEntry?.Invoke(p) == true)
+             {
+                 rejectedAt[key] = p.TimeUtc;
+-                Block(result, "OrderRejected");
++                Rej("OrderRejected");
+                 continue;
+             }
+ 
+@@ -193,18 +219,21 @@ public sealed class ExecutionSimulator
+             // population the filters sample from.
+             if (opt.KeepEveryNth is { } nth && nth > 1 && validEntrySeen++ % nth != 0)
+             {
+-                Block(result, "KeepEveryNth");
++                Rej("KeepEveryNth");
+                 continue;
+             }
+ 
+-            var trade = Execute(p, d, opt, verdict.Path);
++            var trade = Execute(p, d, opt, side, verdict.Path);
+             if (trade is null)
+             {
+-                Block(result, "NoPathAfterEntry");
++                Rej("NoPathAfterEntry");
+                 continue;
+             }
+ 
+             result.Trades.Add(trade);
++            if (opt.LogSignals)
++                result.Log.Add(new SignalLogRow(p.TimeIst, symbol, side.ToString().ToUpperInvariant(), verdict.Path, "ENTERED", "", null,
++                    trade.ExitUtc + SessionClock.IstOffset, trade.ExitReason, trade.PnlRs, trade.CostRs));
+             tradesPerSymbolDay[(symbol, p.TimeIst.Date)] = tradesPerSymbolDay.GetValueOrDefault((symbol, p.TimeIst.Date)) + 1;
+             open.Add((trade.ExitUtc, symbol));
+             lastExitAny = (trade.ExitUtc, symbol, trade.ExitReason);
+@@ -217,9 +246,9 @@ public sealed class ExecutionSimulator
+     private static void Block(SimulationResult r, string gate) =>
+         r.BlockedBy[gate] = r.BlockedBy.GetValueOrDefault(gate) + 1;
+ 
+-    private Trade? Execute(MarketPoint p, SymbolData d, SimulationOptions opt, string entryPath)
++    private Trade? Execute(MarketPoint p, SymbolData d, SimulationOptions opt, TradeSide side, string entryPath)
+     {
+-        var sign = opt.Side == TradeSide.Call ? 1.0 : -1.0;
++        var sign = side == TradeSide.Call ? 1.0 : -1.0;
+         var cfg = _exit.Symbols[p.Symbol];
+ 
+         // the path: following 1m bars of the same session up to (not including) 15:15 IST
+@@ -244,7 +273,7 @@ public sealed class ExecutionSimulator
+ 
+         if (opt.PremiumMode == PremiumMode.OptionHistoryWhereAvailable && _options is not null)
+         {
+-            var real = _options.TryPath(p.Symbol, opt.Side, p.TimeIst, closeTimes.Select(c => c + SessionClock.IstOffset).ToList());
++            var real = _options.TryPath(p.Symbol, side, p.TimeIst, closeTimes.Select(c => c + SessionClock.IstOffset).ToList());
+             if (real is not null)
+             {
+                 source = PremiumSource.OptionMinuteHistory;
+@@ -256,17 +285,17 @@ public sealed class ExecutionSimulator
+ 
+         var r = _exit.IndexStopPoints(p.Atr) * delta;
+         var local = cfg with { Delta = delta, EntryPremium = entryPremium };
+-        var replay = ExitReplay.Run(path, r, p.Atr, local, _exit, opt.StopModel, opt.Side == TradeSide.Call);
++        var replay = ExitReplay.Run(path, r, p.Atr, local, _exit, opt.StopModel, side == TradeSide.Call);
+ 
+         var pnl = replay.PnlPoints * cfg.LotSize;
+         double? cost = opt.Costs is { } c ? c.Cost(replay.Orders, cfg.LotSize, _exit.Lots) : null;
+         var exitUtc = closeTimes[Math.Min(replay.ExitStep, closeTimes.Count - 1)];
+ 
+-        return new Trade(p.Symbol, opt.Side, p.TimeUtc, exitUtc, entryPath, source, entryPremium, r,
++        return new Trade(p.Symbol, side, p.TimeUtc, exitUtc, entryPath, source, entryPremium, r,
+             pnl, cost, replay.ExitReason, replay.Orders, replay.ReachedT1, replay.ReachedMid, replay.ReachedFinal,
+             Entry: new EntryContext(
+                 p.Rsi1m, p.Rsi5m, p.Pcr, p.AtrPct, p.OpenGapPct, p.DayChangePct,
+-                StretchAtr: p.Atr > 0 && p.Ema20 > 0 ? (opt.Side == TradeSide.Call ? 1.0 : -1.0) * (p.Ltp - p.Ema20) / p.Atr : 0,
++                StretchAtr: p.Atr > 0 && p.Ema20 > 0 ? (side == TradeSide.Call ? 1.0 : -1.0) * (p.Ltp - p.Ema20) / p.Atr : 0,
+                 Efficiency: p.DayHigh - p.DayLow > 0 && p.SessionOpen > 0
+                     ? Math.Abs(p.Ltp - p.SessionOpen) / (p.DayHigh - p.DayLow)
+                     : null));
+diff --git a/b/src/Trading.Tests/Backtest/BacktestSharedSlotTests.cs b/src/Trading.Tests/Backtest/BacktestSharedSlotTests.cs
+new file mode 100644
+index 0000000..96523a7
+--- /dev/null
++++ b/src/Trading.Tests/Backtest/BacktestSharedSlotTests.cs
+@@ -0,0 +1,63 @@
++using Trading.Backtest.Data;
++using Trading.Backtest.Entry;
++using Trading.Backtest.Settings;
++using Trading.Backtest.Simulation;
++using Xunit;
++
++namespace Trading.Tests.Backtest;
++
++/// <summary>Diagnostic shared-slot replay: CALL and PUT compete for one position, and every signal minute can be logged.</summary>
++public class BacktestSharedSlotTests
++{
++    private static ExecutionSimulator Create()
++    {
++        var s = BtSupport.LiveLike();
++        return new ExecutionSimulator(new EntryEvaluator(s, BtSupport.Trading(), BtSupport.Instruments()), s, BtSupport.Exit(s), options: null);
++    }
++
++    private static SimulationOptions Opts(bool both, bool log) =>
++        new(TradeSide.Call, StopModel.Live, PremiumMode.ModelOnly, Costs: null, BothSides: both, LogSignals: log);
++
++    private static SymbolData TwoSignals(DateTime callAt, DateTime putAt) =>
++        BtSupport.Data("NIFTY", BtSupport.FlatBars(23940), BtSupport.CallPoint("NIFTY", callAt), BtSupport.PutPoint("NIFTY", putAt));
++
++    [Fact]
++    public void AnOpenCallBlocksALaterPutWhenTheSlotIsShared()
++    {
++        var data = TwoSignals(BtSupport.At(4, 30), BtSupport.At(5, 0));
++
++        var shared = Create().Run([data], Opts(both: true, log: true));
++        var trade = Assert.Single(shared.Trades);
++        Assert.Equal(TradeSide.Call, trade.Side);
++        Assert.Equal(1, shared.BlockedBy["OnePositionGate"]);
++
++        var blocked = Assert.Single(shared.Log, r => r.Outcome == "OnePositionGate");
++        Assert.Equal("PUT", blocked.Side);
++        Assert.Equal("NIFTY", blocked.OpenSymbol);
++        Assert.NotNull(blocked.HeldUntilIst);                       // when the occupying position ends
++        Assert.Equal(shared.TotalSignals, shared.BlockedCount + shared.Trades.Count);
++    }
++
++    [Fact]
++    public void WithoutTheOptionEachSideRunsOnItsOwnAsBefore()
++    {
++        var data = TwoSignals(BtSupport.At(4, 30), BtSupport.At(5, 0));
++
++        var callOnly = Create().Run([data], Opts(both: false, log: false));
++        Assert.Single(callOnly.Trades);
++        Assert.Empty(callOnly.Log);                                  // logging off: nothing recorded
++        Assert.False(callOnly.BlockedBy.ContainsKey("OnePositionGate"));
++    }
++
++    [Fact]
++    public void AnEnteredSignalIsLoggedWithItsExit()
++    {
++        var data = TwoSignals(BtSupport.At(4, 30), BtSupport.At(9, 0));
++
++        var r = Create().Run([data], Opts(both: true, log: true));
++        var entered = Assert.Single(r.Log, x => x.Outcome == "ENTERED" && x.Side == "CALL");
++        Assert.False(string.IsNullOrEmpty(entered.ExitReason));
++        Assert.NotNull(entered.ExitIst);
++        Assert.NotNull(entered.PnlRs);
++    }
++}

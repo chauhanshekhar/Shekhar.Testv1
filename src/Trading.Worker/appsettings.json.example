@@ -34,16 +34,17 @@
     "Mode": "Paper"
   },
   "Trading": {
-    "Capital": 100000,
-    "RiskPercent": 1.0,
-    "MaxTradesPerDay": 10,
-    "MaxLossPerDay": 5000,
+    "Capital": 200000,
+    "RiskPercent": 10.0,
+    "MaxTradesPerDay": 50,
+    "MaxLossPerDay": 50000,
 
-    "AtrStopLossMultiplier": 1.5,
+    "AtrStopLossMultiplier": 1.25,
     "AtrTarget1Multiplier": 2.0,
     "AtrTarget2Multiplier": 3.0,
     "MinimumIndexStopPoints": 20,
     "MaximumIndexStopPoints": 100,
+    "IndexStopFloorAtrMultiplier": 1.5,
     "TrailingSLStepFraction": 0.50,
     "MinPremiumForAtrTrailing": {
       "HeroZero": 5,
@@ -68,5 +69,8 @@
   },
   "HistoricalData": {
     "StartupBackfillMinutes": 75
+  },
+  "OptionChain": {
+    "RefreshSeconds": 30
   }
 }

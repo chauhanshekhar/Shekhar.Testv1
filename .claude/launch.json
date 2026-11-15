@@ -4,9 +4,41 @@
     {
       "name": "trading-ui",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "start", "--", "--port", "4200", "--host", "0.0.0.0"],
+      "runtimeArgs": [
+        "run",
+        "start",
+        "--",
+        "--port",
+        "4200",
+        "--host",
+        "0.0.0.0"
+      ],
       "port": 4200,
       "cwd": "src/Trading.Web"
+    },
+    {
+      "name": "trading-api",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": [
+        "run",
+        "--project",
+        "src/Trading.API",
+        "--launch-profile",
+        "https"
+      ],
+      "port": 7062,
+      "url": "https://localhost:7062"
+    },
+    {
+      "name": "research-explorer",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8899"
+      ],
+      "port": 8899,
+      "cwd": "docs/research"
     }
   ]
 }

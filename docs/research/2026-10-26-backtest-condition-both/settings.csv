@@ -1,0 +1,24 @@
+SettingKey,Symbol,SettingValue,IsActive,UpdatedOn
+BreakevenBufferPoints,BANKNIFTY,15.0,True,2026-09-18 03:40:22
+BreakevenBufferPoints,NIFTY,8.0,True,2026-09-29 04:59:46
+BreakevenBufferPoints,SENSEX,12.0,True,2026-09-29 04:59:32
+CallPcrMaximum,(global),1.5,True,2026-10-26 07:44:37
+CallPcrMinimum,(global),0.98,True,2026-10-01 01:49:42
+CallRsiCeiling,(global),70.0,True,2026-10-05 12:03:44
+CallRsiFloor,(global),53.0,True,2026-10-05 12:03:44
+EnableBreakevenArm,(global),1.0,True,2026-09-17 04:43:45
+EnableBreakevenPartialSale,BANKNIFTY,0.0,True,2026-09-29 20:07:23
+EnableBreakevenPartialSale,NIFTY,0.0,True,2026-09-29 20:07:23
+EnableBreakevenPartialSale,SENSEX,0.0,True,2026-09-29 20:07:23
+EnableEarlyTrendGate,(global),1.0,True,2026-10-07 18:58:34
+EnableNoTradeWindowGate,(global),1.0,True,2026-10-04 08:08:30
+EnableTargetLadder,(global),1.0,True,2026-09-30 05:52:03
+MinAtrPercent,BANKNIFTY,0.03,True,2026-09-10 06:57:08
+MinAtrPercent,NIFTY,0.03,True,2026-09-10 06:57:08
+MinAtrPercent,SENSEX,0.03,True,2026-09-10 06:57:08
+PutPcrMaximum,(global),1.4,True,2026-09-10 08:48:21
+PutPcrMinimum,SENSEX,0.7,True,2026-10-01 01:46:08
+PutRsiCeiling,(global),38.0,True,2026-09-04 02:02:11
+PutRsiFloor,(global),28.0,True,2026-09-04 02:02:11
+TargetLadderFinalR,(global),5.0,True,2026-09-30 05:52:02
+TargetLadderMidR,(global),3.0,True,2026-09-30 05:52:02

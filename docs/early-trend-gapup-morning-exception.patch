@@ -1,0 +1,279 @@
+diff --git a/src/Trading.Worker/SignalGates/EarlyTrendGate.cs b/src/Trading.Worker/SignalGates/EarlyTrendGate.cs
+index 7b5e2ff..2226bff 100644
+--- a/src/Trading.Worker/SignalGates/EarlyTrendGate.cs
++++ b/src/Trading.Worker/SignalGates/EarlyTrendGate.cs
+@@ -1,3 +1,6 @@
++using Microsoft.Extensions.DependencyInjection;
++using Microsoft.Extensions.Logging;
++using Trading.Application.Interfaces;
+ using Trading.Domain;
+ using Trading.Domain.Entities;
+ 
+@@ -18,12 +21,26 @@ namespace Trading.Worker.SignalGates;
+ ///   EnableEarlyTrendGate  0/1                                       (default off)
+ ///   EarlyTrendGateSide    0 = CALL and PUT, 1 = CALL only, 2 = PUT only   (default 1: the PUT evidence is not consistent)
+ /// If either 5m EMA is not available yet (0) the gate lets the signal through. HeroZero is exempt, like the other entry gates.
++///
++/// EXPERIMENTAL gap-up morning exception (Version D1, docs/research/2026-11-04-gapup-morning-exception). HYPOTHESIS, NOT VALIDATED:
++/// validation improved on 4-5 added trades, drawdown rose, and the idea was formed after inspecting the full sample. Off by default.
++///   EnableGapUpMorningException  0/1   (default off)
++/// When on, a CALL that the gate would block is allowed if ALL hold: PAPER trading mode, session opened at least 0.30% above the
++/// previous close, IST time before 10:00, and 5m EMA20 above EMA50. The 0.30% and 10:00 are fixed constants on purpose: they are the
++/// only values tested, so no setting can quietly turn this into an untested strategy. Live and HeroZero modes never use it.
+ /// </summary>
+ public class EarlyTrendGate : IPostSignalGate
+ {
+     internal const string EnableKey = "EnableEarlyTrendGate";
+     internal const string SideKey = "EarlyTrendGateSide";
+     internal const int SideBoth = 0, SideCallOnly = 1, SidePutOnly = 2;
++    internal const string GapUpMorningKey = "EnableGapUpMorningException";
++
++    /// <summary>Fixed by design (the tested definition): session open at least this many percent above the previous close.</summary>
++    internal const decimal GapUpMorningMinGapPct = 0.30m;
++
++    /// <summary>Fixed by design (the tested cutoff): the exception ends at 10:00 IST.</summary>
++    internal static readonly TimeSpan GapUpMorningCutoff = new(10, 0, 0);
+ 
+     public Task<string?> BlockAsync(SignalContext ctx, MarketSnapshot market, Signal signal, CancellationToken ct)
+     {
+@@ -36,9 +53,49 @@ public class EarlyTrendGate : IPostSignalGate
+         var side = ctx.StrategySettings.GetInt(SideKey, ctx.Symbol, SideCallOnly);
+         var reason = Evaluate(signal.SignalType, market.Ema20_5m, market.Ema50_5m, side);
+ 
++        if (reason is not null)
++        {
++            var now = IstClock.Now;
++            var gapPct = GapPct(market.DayOpen, market.YesterdayClose);
++            var isPaper = ctx.Orders?.CurrentMode == TradingMode.Paper;
++            var switchOn = ctx.StrategySettings.GetBool(GapUpMorningKey, ctx.Symbol, false);
++
++            if (GapUpMorningExempt(signal.SignalType, market.Ema20_5m, market.Ema50_5m, gapPct, now.TimeOfDay, switchOn, isPaper))
++            {
++                // ELIGIBLE = the gate would have blocked this CALL and the exception let it through. Whether it then became a trade
++                // depends on the gates after this one; those trades are found by matching Signals (docs/set-gapup-morning-exception.sql).
++                ctx.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger<EarlyTrendGate>().LogInformation(
++                    "EarlyTrendGate GAPUP_MORNING_EXCEPTION_ELIGIBLE {Symbol} {SignalType} at {Time:HH:mm:ss} IST: gap={GapPct:F2}% " +
++                    "5mEMA20={Ema20_5m:F2} 5mEMA50={Ema50_5m:F2} entry={Entry} (paper mode, before {Cutoff:hh\\:mm})",
++                    ctx.Symbol, signal.SignalType, now, gapPct, market.Ema20_5m, market.Ema50_5m, signal.EntryPrice, GapUpMorningCutoff);
++                return Task.FromResult<string?>(null);
++            }
++        }
++
+         return Task.FromResult(reason is null ? null : $"{reason} ({ctx.Symbol})");
+     }
+ 
++    /// <summary>
++    /// Gap in percent of the session open over the previous close, or null when either price is missing, zero or negative.
++    /// Computed here with its own fixed definition; it deliberately does not read OpeningRsiGapPct, which is a tunable RSI setting.
++    /// </summary>
++    internal static decimal? GapPct(decimal dayOpen, decimal yesterdayClose) =>
++        dayOpen > 0 && yesterdayClose > 0 ? (dayOpen - yesterdayClose) / yesterdayClose * 100m : null;
++
++    /// <summary>
++    /// Pure decision for the experimental exception. Every input is an argument (including the time), so the boundary can be tested.
++    /// True only for a CALL, with the switch on, in PAPER mode, a gap of at least 0.30%, a time strictly before 10:00 IST, and 5m EMA20
++    /// above EMA50. A missing gap (null) or a missing 5m EMA (0) is never exempt.
++    /// </summary>
++    internal static bool GapUpMorningExempt(string signalType, decimal ema20_5m, decimal ema50_5m, decimal? gapPct,
++        TimeSpan istTimeOfDay, bool switchOn, bool isPaper) =>
++        switchOn
++        && isPaper
++        && signalType == TradingConst.SignalType.CALL
++        && gapPct is { } gap && gap >= GapUpMorningMinGapPct
++        && istTimeOfDay < GapUpMorningCutoff
++        && ema20_5m > 0 && ema50_5m > 0 && ema20_5m > ema50_5m;
++
+     /// <summary>Whether the gate applies to this direction under the configured side.</summary>
+     internal static bool AppliesTo(int side, string signalType) => side switch
+     {
+diff --git a/src/Trading.Tests/EarlyTrendGateTests.cs b/src/Trading.Tests/EarlyTrendGateTests.cs
+index a06e5da..e31594e 100644
+--- a/src/Trading.Tests/EarlyTrendGateTests.cs
++++ b/src/Trading.Tests/EarlyTrendGateTests.cs
+@@ -106,3 +106,110 @@ public class EarlyTrendGateTests
+         StrategyHint: "", NewsEvent: null,
+         LastTickAge: TimeSpan.Zero, LastOptionChainAge: TimeSpan.Zero, LastClosed5mCandle: null);
+ }
++
++
++public class EarlyTrendGapUpMorningExceptionTests
++{
++    private const string Call = TradingConst.SignalType.CALL, Put = TradingConst.SignalType.PUT;
++    private static readonly TimeSpan T0959 = new(9, 59, 59), T1000 = new(10, 0, 0), T1001 = new(10, 1, 0), T0925 = new(9, 25, 0);
++
++    private static bool Exempt(string type = Call, decimal e20 = 55020m, decimal e50 = 55000m, decimal? gap = 0.40m,
++        TimeSpan? time = null, bool on = true, bool paper = true)
++        => EarlyTrendGate.GapUpMorningExempt(type, e20, e50, gap, time ?? T0925, on, paper);
++
++    [Fact]
++    public void BeforeTen_GapUpCall_IsAllowed() => Assert.True(Exempt(time: T0959));
++
++    [Fact]
++    public void ExactlyTen_IsBlocked() => Assert.False(Exempt(time: T1000));
++
++    [Fact]
++    public void AfterTen_IsBlocked() => Assert.False(Exempt(time: T1001));
++
++    [Fact]
++    public void SwitchOff_NeverExempt() => Assert.False(Exempt(on: false));
++
++    [Fact]
++    public void NotPaperMode_NeverExempt() => Assert.False(Exempt(paper: false));
++
++    [Theory]
++    [InlineData(0.29)]    // just under the fixed 0.30%
++    [InlineData(0.0)]
++    [InlineData(-0.50)]   // gap down
++    public void NormalOrGapDownOpen_IsBlocked(double gap) => Assert.False(Exempt(gap: (decimal)gap));
++
++    [Fact]
++    public void ExactlyThirtyBasisPoints_IsGapUp() => Assert.True(Exempt(gap: 0.30m));
++
++    [Fact]
++    public void GapUpPut_IsNotExempt() => Assert.False(Exempt(type: Put));
++
++    [Fact]
++    public void Missing5mEma_IsNotExempt()
++    {
++        Assert.False(Exempt(e20: 0m));
++        Assert.False(Exempt(e50: 0m));
++    }
++
++    [Fact]
++    public void FiveMinuteTrendNotUp_IsNotExempt() => Assert.False(Exempt(e20: 54990m, e50: 55000m));
++
++    [Theory]
++    [InlineData(0, 55000)]
++    [InlineData(55200, 0)]
++    [InlineData(-1, 55000)]
++    [InlineData(55200, -1)]
++    public void GapPct_MissingZeroOrNegativePrices_IsNull(double open, double prevClose)
++        => Assert.Null(EarlyTrendGate.GapPct((decimal)open, (decimal)prevClose));
++
++    [Fact]
++    public void GapPct_UsesOpenOverPreviousClose() => Assert.Equal(0.40m, Math.Round(EarlyTrendGate.GapPct(55220m, 55000m)!.Value, 2));
++
++    [Fact]
++    public void InvalidGap_IsNotExempt() => Assert.False(Exempt(gap: EarlyTrendGate.GapPct(0m, 55000m)));
++
++    // The gate's own decision and the side setting are untouched by the exception.
++    [Fact]
++    public void ExistingDecision_Unchanged()
++    {
++        Assert.NotNull(EarlyTrendGate.Evaluate(Call, 55020m, 55000m, EarlyTrendGate.SideCallOnly));
++        Assert.Null(EarlyTrendGate.Evaluate(Put, 54990m, 55000m, EarlyTrendGate.SideCallOnly));
++    }
++
++    // ── wiring: other dependencies null, so the gate sees no paper mode and no logger ──────────────────
++    private static Task<string?> Block(FakeStrategySettingsService settings, string strategyType = TradingConst.StrategyType.Single)
++        => new EarlyTrendGate().BlockAsync(
++            new SignalContext(
++                Symbol: "BANKNIFTY",
++                CandleRepo: null!, SignalRepo: null!, OrderRepo: null!, OptionRepo: null!,
++                SettingsRepo: null!, PnlRepo: null!, JournalRepo: null!, EventRepo: null!, TickRepo: null!,
++                Ema: null!, Rsi: null!, Atr: null!, Pcr: null!, Oi: null!, Regime: null!, Engine: null!,
++                HeroZeroEngine: null!, Risk: null!, Orders: null!, LiveData: null!, Hub: null!, Uow: null!,
++                Settings: new TradingSettings(), EventCalendar: null!, Instruments: null!,
++                SystemSettings: null!, RuntimeSettings: null!, StrategySettings: settings),
++            new MarketSnapshot(
++                Candles1m: new List<Candle>(), Candles5m: new List<Candle>(), OptionChain: new List<OptionChainData>(),
++                PrevOiByKey: new Dictionary<(decimal, string), long>(),
++                MarketRegime: new MarketRegime(MarketTrend.Uptrend, MarketVolatility.High, false, false, false, 0m),
++                Ema20: 0m, Ema50: 0m, Ema20_5m: 55020m, Ema50_5m: 55000m,
++                Rsi: 0m, Rsi5m: null, AtrPct: 0.050m, AtrRaw: 48m, Ltp: 55000m, YesterdayClose: 55000m,
++                CurrentVolume: 0m, AvgVolume20: 0m, PriceChangePct: 0m,
++                DayOpen: 55220m, DayLow: 0m, DayHigh: 0m, DayChangePct: 0m, Vwap: null, PcrValue: 0m,
++                StrategyHint: "", NewsEvent: null,
++                LastTickAge: TimeSpan.Zero, LastOptionChainAge: TimeSpan.Zero, LastClosed5mCandle: null),
++            new Signal { Symbol = "BANKNIFTY", SignalType = Call, StrategyType = strategyType }, CancellationToken.None);
++
++    [Fact]
++    public async Task SwitchOn_ButNoPaperMode_StillBlocks()
++        => Assert.NotNull(await Block(new FakeStrategySettingsService()
++            .Set(EarlyTrendGate.EnableKey, 1).Set(EarlyTrendGate.GapUpMorningKey, 1)));
++
++    [Fact]
++    public async Task SwitchOffByDefault_Blocks()
++        => Assert.NotNull(await Block(new FakeStrategySettingsService().Set(EarlyTrendGate.EnableKey, 1)));
++
++    [Fact]
++    public async Task HeroZero_StaysExempt_WhateverTheSwitch()
++        => Assert.Null(await Block(new FakeStrategySettingsService()
++            .Set(EarlyTrendGate.EnableKey, 1).Set(EarlyTrendGate.GapUpMorningKey, 1), TradingConst.StrategyType.HeroZero));
++}
+diff --git a/docs/set-gapup-morning-exception.sql b/docs/set-gapup-morning-exception.sql
+new file mode 100644
+index 0000000..686e425
+--- /dev/null
++++ b/docs/set-gapup-morning-exception.sql
+@@ -0,0 +1,70 @@
++/* EnableGapUpMorningException - EXPERIMENTAL EarlyTrendGate exception (Version D1). REVIEW ONLY: do not run until the code diff is approved
++   and deployed. Not executed by Claude.
++
++   HYPOTHESIS, NOT VALIDATED (docs/research/2026-11-04-gapup-morning-exception/REPORT.md): validation improved on 4-5 added trades,
++   drawdown rose, and the idea was formed after inspecting the full sample.
++
++   Behaviour when ON (code in EarlyTrendGate): a CALL the gate would block is allowed only if ALL hold:
++     - Trading mode is PAPER (Live and HeroZero modes ignore this setting, even when it is 1)
++     - session open >= 0.30% above the previous close  (fixed in code, NOT read from OpeningRsiGapPct)
++     - IST time strictly before 10:00                   (fixed in code, no setting)
++     - 5m EMA20 > 5m EMA50
++   Scope: one GLOBAL row (Symbol IS NULL). StrategySettingsService looks up exact Symbol -> Symbol IS NULL -> default, and the gate reads it with
++   GetBool(key, ctx.Symbol, false), so this row applies to every symbol. A per-symbol row would override it for that symbol.
++   Settings are cached ~5 minutes. */
++
++DECLARE @Enable decimal(18,6) = 0;      -- keep 0 until the diff is approved AND deployed; 1 = on (paper only)
++
++-- APPLY (idempotent, global row)
++UPDATE dbo.StrategySettings
++SET SettingValue = @Enable, IsActive = 1, UpdatedOn = SYSDATETIME(),
++    Description = N'EXPERIMENTAL: allow CALL past EarlyTrendGate on gap-up (>=0.30%) mornings before 10:00 IST, PAPER mode only'
++WHERE SettingKey = N'EnableGapUpMorningException' AND Symbol IS NULL;
++
++IF @@ROWCOUNT = 0
++    INSERT dbo.StrategySettings (SettingKey, Symbol, SettingValue, IsActive, Description, UpdatedOn)
++    VALUES (N'EnableGapUpMorningException', NULL, @Enable, 1,
++            N'EXPERIMENTAL: allow CALL past EarlyTrendGate on gap-up (>=0.30%) mornings before 10:00 IST, PAPER mode only', SYSDATETIME());
++
++/* ROLLBACK (turn it off; the row can stay)
++UPDATE dbo.StrategySettings SET SettingValue = 0, UpdatedOn = SYSDATETIME()
++WHERE SettingKey = N'EnableGapUpMorningException' AND Symbol IS NULL;
++-- or remove it: DELETE FROM dbo.StrategySettings WHERE SettingKey = N'EnableGapUpMorningException' AND Symbol IS NULL;
++*/
++
++-- VERIFY 1: the switch is OFF (SettingValue 0) and there is no per-symbol override.
++SELECT SettingKey, Symbol, SettingValue, IsActive, UpdatedOn
++FROM dbo.StrategySettings
++WHERE SettingKey = N'EnableGapUpMorningException';
++
++-- VERIFY 2 (system mode): the exception only works in Paper. Never SELECT * from SystemSettings; read this one key only.
++SELECT [Key], [Value] FROM dbo.SystemSettings WHERE [Key] = N'TradingMode';
++
++/* FORWARD TEST 1 - exception-ELIGIBLE minutes, from stored snapshots (SnapshotTime is IST). The gate also writes an INFO log line
++   "EarlyTrendGate GAPUP_MORNING_EXCEPTION_ELIGIBLE {Symbol} ... gap= 5mEMA20= 5mEMA50= entry=" for each CALL it let through.
++   A snapshot row matching these conditions is where the live gate would normally have blocked a CALL. */
++DECLARE @From date = '2026-11-05';      -- first session with the switch on
++SELECT SnapshotTime, Symbol, DayOpen, YesterdayClose,
++       g.GapPct, Ema20_5m, Ema50_5m, SignalGenerated, BlockedBy, BlockedReason
++FROM dbo.IndicatorSnapshots
++CROSS APPLY (SELECT (DayOpen - YesterdayClose) / NULLIF(YesterdayClose, 0) * 100.0 AS GapPct) g
++WHERE SnapshotTime >= @From
++  AND CAST(SnapshotTime AS time) < '10:00:00'
++  AND g.GapPct >= 0.30
++  AND Ema20_5m > Ema50_5m AND Ema50_5m > 0
++  AND SignalGenerated = 1
++ORDER BY SnapshotTime;
++
++/* FORWARD TEST 2 - ACTUAL entries: CALL signals created before 10:00 on gap-up sessions with the 5m trend already up. The gate cannot see
++   later gates, so an eligible log line is not an entry; a row here is a real signal that passed everything after the exception.
++   Compare each row with the ELIGIBLE log line (same Symbol, same minute). */
++SELECT s.Id, s.Symbol, s.SignalType, s.CreatedOn, s.EntryPrice, s.Status, s.ExitReason
++FROM dbo.Signals s
++JOIN dbo.IndicatorSnapshots i
++  ON i.Symbol = s.Symbol
++ AND i.SnapshotTime >= DATEADD(minute, -1, s.CreatedOn) AND i.SnapshotTime <= s.CreatedOn
++CROSS APPLY (SELECT (i.DayOpen - i.YesterdayClose) / NULLIF(i.YesterdayClose, 0) * 100.0 AS GapPct) g
++WHERE s.SignalType = N'CALL' AND s.CreatedOn >= @From
++  AND CAST(s.CreatedOn AS time) < '10:00:00'
++  AND g.GapPct >= 0.30 AND i.Ema20_5m > i.Ema50_5m AND i.Ema50_5m > 0
++ORDER BY s.CreatedOn;

@@ -441,11 +441,19 @@ namespace Trading.Infrastructure.Migrations
                         .HasPrecision(18, 4)
                         .HasColumnType("decimal(18,4)");
 
+                    b.Property<decimal?>("Ema21")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
                     b.Property<decimal>("Ema50")
                         .HasPrecision(18, 4)
                         .HasColumnType("decimal(18,4)");
 
                     b.Property<decimal>("Ema50_5m")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal?>("Ema9")
                         .HasPrecision(18, 4)
                         .HasColumnType("decimal(18,4)");
 
@@ -466,6 +474,9 @@ namespace Trading.Infrastructure.Migrations
                     b.Property<decimal>("Pcr")
                         .HasPrecision(18, 4)
                         .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal?>("PcrFullChain")
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<decimal>("PriceChangePct")
                         .HasPrecision(18, 4)
@@ -772,6 +783,76 @@ namespace Trading.Infrastructure.Migrations
                         .HasDatabaseName("IX_OptionChainData_Symbol_ExpiryDate");
 
                     b.ToTable("OptionChainData");
+                });
+
+            modelBuilder.Entity("Trading.Domain.Entities.OptionMinuteHistory", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<long>("ChangeInOi")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("CreatedOn")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("Delta")
+                        .HasPrecision(10, 6)
+                        .HasColumnType("decimal(10,6)");
+
+                    b.Property<DateTime>("ExpiryDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("ImpliedVolatility")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("Ltp")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime>("MinuteTime")
+                        .HasColumnType("datetime2");
+
+                    b.Property<long>("OpenInterest")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("OptionType")
+                        .IsRequired()
+                        .HasMaxLength(2)
+                        .HasColumnType("nvarchar(2)");
+
+                    b.Property<decimal>("StrikePrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("Symbol")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("TradingSymbol")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<decimal>("UnderlyingLtp")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MinuteTime")
+                        .HasDatabaseName("IX_OptionMinuteHistory_MinuteTime");
+
+                    b.HasIndex("Symbol", "MinuteTime", "TradingSymbol")
+                        .IsUnique()
+                        .HasDatabaseName("UX_OptionMinuteHistory_Symbol_Minute_Leg");
+
+                    b.ToTable("OptionMinuteHistory", (string)null);
                 });
 
             modelBuilder.Entity("Trading.Domain.Entities.Order", b =>
@@ -1224,6 +1305,9 @@ namespace Trading.Infrastructure.Migrations
                     b.Property<decimal>("PcrAtEntry")
                         .HasColumnType("decimal(18,2)");
 
+                    b.Property<decimal?>("PcrFullChainAtEntry")
+                        .HasColumnType("decimal(18,2)");
+
                     b.Property<decimal>("ProtectedSL")
                         .HasColumnType("decimal(18,2)");
 
@@ -1232,6 +1316,10 @@ namespace Trading.Infrastructure.Migrations
 
                     b.Property<int>("RemainingQty")
                         .HasColumnType("int");
+
+                    b.Property<decimal?>("Rsi5mAtEntry")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
 
                     b.Property<decimal>("RsiAtEntry")
                         .HasColumnType("decimal(18,2)");
@@ -1703,6 +1791,9 @@ namespace Trading.Infrastructure.Migrations
                     b.Property<decimal>("PcrAtEntry")
                         .HasColumnType("decimal(18,2)");
 
+                    b.Property<decimal?>("PcrFullChainAtEntry")
+                        .HasColumnType("decimal(18,2)");
+
                     b.Property<decimal>("ProfitLoss")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
@@ -1713,6 +1804,10 @@ namespace Trading.Infrastructure.Migrations
                     b.Property<string>("Remarks")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<decimal?>("Rsi5mAtEntry")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
 
                     b.Property<decimal>("RsiAtEntry")
                         .HasColumnType("decimal(18,2)");

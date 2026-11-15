@@ -30,12 +30,14 @@ internal static class BrokerExtensions
         services.AddSingleton<IGrowwHttpService>(sp =>
         {
             var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("Groww");
-            GrowwHttpClientHelper.ConfigureClient(http, sp.GetRequiredService<IOptionsMonitor<GrowwSettings>>().CurrentValue);
+            var growwSettings = sp.GetRequiredService<IOptionsMonitor<GrowwSettings>>().CurrentValue;
+            GrowwHttpClientHelper.ConfigureClient(http, growwSettings);
             return new GrowwHttpService(
                 http,
                 sp.GetRequiredService<IGrowwAuthService>(),
                 sp.GetRequiredService<AppErrorLogger>(),
-                sp.GetRequiredService<IServiceScopeFactory>());
+                sp.GetRequiredService<IServiceScopeFactory>(),
+                new GrowwRateLimiter(growwSettings.RateLimits));
         });
         services.AddSingleton<IGrowwLiveDataService>(sp =>
             new GrowwLiveDataService(sp.GetRequiredService<IGrowwHttpService>()));

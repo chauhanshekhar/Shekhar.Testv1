@@ -34,6 +34,9 @@ public class GrowwSettings
     public string BaseUrl { get; set; } = "https://api.groww.in";
     public TradingMode Mode { get; set; } = TradingMode.Paper;
 
+    /// <summary>Per-process Groww call budgets by category (Groww:RateLimits); see GrowwRateLimits.</summary>
+    public GrowwRateLimits RateLimits { get; set; } = new();
+
     public bool IsPaperMode => Mode == TradingMode.Paper;
     public bool IsHeroZeroMode => Mode == TradingMode.HeroZero;
     public bool IsLiveMode => Mode == TradingMode.Live;

@@ -16,12 +16,25 @@ public class OptionChainWorker : BackgroundService
     public OptionChainWorker(
         ILogger<OptionChainWorker> logger,
         IServiceScopeFactory scopeFactory,
-        IInstrumentCache instrumentCache)
+        IInstrumentCache instrumentCache,
+        IConfiguration configuration)
     {
         _logger = logger;
         _scopeFactory = scopeFactory;
         _instrumentCache = instrumentCache;
+        _period = RefreshPeriod(configuration.GetValue<int?>("OptionChain:RefreshSeconds"));
     }
+
+    // Start-to-start period, from OptionChain:RefreshSeconds (default 15, clamped 5-60). The old
+    // loop slept 30 s AFTER fetching, so a cycle took ~50 s; one cycle itself takes a median 10 s
+    // (p90 17.5 s, 2026-10-05: three symbols fetched in sequence), so 15 s is the practical floor.
+    internal const int DefaultRefreshSeconds = 15;
+    private static readonly TimeSpan MinPause = TimeSpan.FromSeconds(1);
+    private readonly TimeSpan _period;
+
+    /// <summary>Configured refresh period: default 15 s, clamped to 5-60 s. Exposed for testing.</summary>
+    internal static TimeSpan RefreshPeriod(int? configuredSeconds)
+        => TimeSpan.FromSeconds(Math.Clamp(configuredSeconds ?? DefaultRefreshSeconds, 5, 60));
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -33,6 +46,7 @@ public class OptionChainWorker : BackgroundService
                 continue;
             }
 
+            var cycleStart = DateTime.UtcNow;
             var instruments = _instrumentCache.GetActive();
 
             if (instruments.Count == 0)
@@ -58,8 +72,27 @@ public class OptionChainWorker : BackgroundService
                 }
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
+            await Task.Delay(NextDelay(_period, DateTime.UtcNow - cycleStart), stoppingToken);
         }
+    }
+
+    /// <summary>
+    /// Pause so cycles start every <paramref name="period"/>; at least MinPause when a cycle overran,
+    /// so a slow broker never turns this into a tight loop. Exposed for testing.
+    /// </summary>
+    internal static TimeSpan NextDelay(TimeSpan period, TimeSpan elapsed)
+        => elapsed >= period ? MinPause : period - elapsed;
+
+    /// <summary>Total PE OI / total CE OI over every strike; null when there is no CE OI. Exposed for testing.</summary>
+    internal static decimal? CalculateFullChainPcr(IEnumerable<(long? CeOi, long? PeOi)> strikes)
+    {
+        long ce = 0, pe = 0;
+        foreach (var (ceOi, peOi) in strikes)
+        {
+            ce += ceOi ?? 0L;
+            pe += peOi ?? 0L;
+        }
+        return ce > 0 ? Math.Round((decimal)pe / ce, 4, MidpointRounding.AwayFromZero) : null;
     }
 
     private async Task FetchAndPersistAsync(TradingInstrument instrument, CancellationToken ct)
@@ -94,6 +127,8 @@ public class OptionChainWorker : BackgroundService
         {
             return;
         }
+
+        var fullChainPcr = CalculateFullChainPcr(payload.Strikes.Values.Select(x => (x.CE?.OpenInterest, x.PE?.OpenInterest)));
 
         // Find ATM by closest strike to current spot
         var sortedStrikes = payload.Strikes.Keys
@@ -197,12 +232,90 @@ public class OptionChainWorker : BackgroundService
             pcrIndicator.UpdatedOn = now;
         }
 
+        // Full-chain PCR (all strikes) is read by MarketSnapshot. Null (no CE OI) is not written,
+        // so the previous row goes stale and the reader treats it as missing.
+        if (fullChainPcr.HasValue)
+        {
+            var fullIndicator = await indicatorRepo.FirstOrDefaultAsync(
+                i => i.Symbol == dbSymbol && i.IndicatorName == TradingConst.Indicator.PcrFullChain);
+
+            if (fullIndicator is null)
+            {
+                await indicatorRepo.StageAsync(new SymbolIndicator
+                {
+                    Symbol = dbSymbol,
+                    IndicatorName = TradingConst.Indicator.PcrFullChain,
+                    Value = fullChainPcr.Value,
+                    UpdatedOn = now
+                });
+            }
+            else
+            {
+                fullIndicator.Value = fullChainPcr.Value;
+                fullIndicator.UpdatedOn = now;
+            }
+        }
+
         await repo.StageRangeAsync(rows);
         await uow.SaveChangesAsync();
+
+        // Per-minute history for backtests. After the chain save and before the prune, so the
+        // live chain is already persisted whatever happens here, and best-effort so a failure
+        // can never stop the chain feed the exit path depends on.
+        await SaveMinuteHistoryAsync(scope.ServiceProvider, uow, dbSymbol, rows, now, ct);
 
         // Prune snapshots older than 2 hours
         var pruneCutoff = now.AddHours(-2);
         await repo.ExecuteDeleteAsync(x => x.Symbol == dbSymbol && x.CreatedOn < pruneCutoff);
     }
 
+    /// <summary>
+    /// First chain fetch of each minute is copied to OptionMinuteHistory (one row per leg).
+    /// Idempotent: skipped when that minute is already stored; the unique index is the backstop.
+    /// </summary>
+    private async Task SaveMinuteHistoryAsync(
+        IServiceProvider sp, IUnitOfWork uow, string symbol, List<OptionChainData> rows, DateTime now, CancellationToken ct)
+    {
+        try
+        {
+            var minute = ToMinute(now);
+            var historyRepo = sp.GetRequiredService<IRepository<OptionMinuteHistory>>();
+
+            var already = await historyRepo.FirstOrDefaultAsync(h => h.Symbol == symbol && h.MinuteTime == minute);
+            if (already is not null) return;
+
+            await historyRepo.StageRangeAsync(ToMinuteHistory(rows, minute, now));
+            await uow.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "OptionMinuteHistory write skipped for {Symbol} at {Now}", symbol, now);
+        }
+    }
+
+    internal static DateTime ToMinute(DateTime t) => new(t.Year, t.Month, t.Day, t.Hour, t.Minute, 0, t.Kind);
+
+    /// <summary>Pure mapping from a chain snapshot to its minute-history rows. Exposed for testing.</summary>
+    internal static List<OptionMinuteHistory> ToMinuteHistory(IEnumerable<OptionChainData> rows, DateTime minute, DateTime now)
+        => rows
+            .Where(r => r.Ltp > 0 && !string.IsNullOrWhiteSpace(r.TradingSymbol))
+            .GroupBy(r => r.TradingSymbol)
+            .Select(g => g.First())
+            .Select(r => new OptionMinuteHistory
+            {
+                Symbol = r.Symbol,
+                MinuteTime = minute,
+                TradingSymbol = r.TradingSymbol,
+                StrikePrice = r.StrikePrice,
+                OptionType = r.OptionType,
+                ExpiryDate = r.ExpiryDate,
+                Ltp = r.Ltp,
+                Delta = r.Delta,
+                ImpliedVolatility = r.ImpliedVolatility,
+                OpenInterest = r.OpenInterest,
+                ChangeInOi = r.ChangeInOi,
+                UnderlyingLtp = r.UnderlyingLtp,
+                CreatedOn = now,
+            })
+            .ToList();
 }

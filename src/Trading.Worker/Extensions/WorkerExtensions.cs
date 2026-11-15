@@ -10,6 +10,9 @@ internal static class WorkerExtensions
         services.AddHostedService<HistoricalDataWorker>();    // 1m+5m candles from Groww API
         services.AddHostedService<MarketFeedWorker>();
         services.AddHostedService<EmaWorker>();
+        // Rolls TradingInstruments.Expiry forward; off unless StrategySettings EnableExpiryAutoRoll is set.
+        services.AddSingleton<Trading.Infrastructure.Brokers.Groww.ExpiryRollService>();
+        services.AddHostedService<ExpiryRollWorker>();        // before OptionChainWorker reads Expiry
         services.AddHostedService<OptionChainWorker>();
         services.AddHostedService<SignalWorker>();
         services.AddHostedService<ExitWorker>();

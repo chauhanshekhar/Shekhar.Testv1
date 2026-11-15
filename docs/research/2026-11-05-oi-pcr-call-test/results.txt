@@ -1,0 +1,49 @@
+sessions=20 train<2026-10-26 hold>=2026-10-30 rows_with_OI=16949/17946
+BASE                                                                   ALL n=4075 d=20 win=45% ExpR=-0.004 PF=0.99 | train n=2475 d=12 win=43% ExpR=-0.048 PF=0.92 | val n=799 d=4 win=49% ExpR=+0.082 PF=1.16 | hold n=801 d=4 win=48% ExpR=+0.046 PF=1.09
+      GapUp    n=1103 d=16 win=44% ExpR=-0.027 PF=0.95
+      Normal   n=2275 d=19 win=45% ExpR=-0.004 PF=0.99
+      GapDown  n=697 d=11 win=47% ExpR=+0.032 PF=1.06
+Underlying rising                                                      ALL n=2352 d=20 win=45% ExpR=-0.004 PF=0.99 | train n=1339 d=12 win=43% ExpR=-0.055 PF=0.90 | val n=525 d=4 win=48% ExpR=+0.056 PF=1.11 | hold n=488 d=4 win=49% ExpR=+0.073 PF=1.14
+      GapUp    n=654 d=15 win=47% ExpR=+0.029 PF=1.06
+      Normal   n=1299 d=19 win=44% ExpR=-0.030 PF=0.95
+      GapDown  n=399 d=11 win=47% ExpR=+0.026 PF=1.05
+PutOI up                                                               ALL n=2368 d=20 win=45% ExpR=-0.000 PF=1.00 | train n=1296 d=12 win=43% ExpR=-0.054 PF=0.90 | val n=576 d=4 win=50% ExpR=+0.096 PF=1.19 | hold n=496 d=4 win=47% ExpR=+0.029 PF=1.05
+      GapUp    n=709 d=16 win=46% ExpR=+0.008 PF=1.02
+      Normal   n=1317 d=19 win=45% ExpR=-0.016 PF=0.97
+      GapDown  n=342 d=11 win=47% ExpR=+0.042 PF=1.08
+CallOI down                                                            ALL n=1503 d=20 win=47% ExpR=+0.044 PF=1.08 | train n=796 d=12 win=47% ExpR=+0.031 PF=1.06 | val n=399 d=4 win=47% ExpR=+0.037 PF=1.07 | hold n=308 d=4 win=49% ExpR=+0.086 PF=1.17
+      GapUp    n=457 d=13 win=49% ExpR=+0.078 PF=1.15
+      Normal   n=753 d=19 win=46% ExpR=+0.017 PF=1.03
+      GapDown  n=293 d=11 win=48% ExpR=+0.059 PF=1.11
+PutOI up & CallOI down                                                 ALL n=1161 d=20 win=47% ExpR=+0.033 PF=1.06 | train n=565 d=12 win=46% ExpR=+0.005 PF=1.01 | val n=356 d=4 win=48% ExpR=+0.063 PF=1.12 | hold n=240 d=4 win=48% ExpR=+0.054 PF=1.10
+      GapUp    n=378 d=13 win=47% ExpR=+0.042 PF=1.08
+      Normal   n=590 d=19 win=47% ExpR=+0.029 PF=1.05
+      GapDown  n=193 d=10 win=47% ExpR=+0.026 PF=1.05
+PutOI up & CallOI down & rising                                        ALL n=940 d=20 win=47% ExpR=+0.044 PF=1.08 | train n=437 d=12 win=47% ExpR=+0.027 PF=1.05 | val n=305 d=4 win=46% ExpR=+0.010 PF=1.02 | hold n=198 d=4 win=52% ExpR=+0.133 PF=1.27
+      GapUp    n=314 d=13 win=49% ExpR=+0.072 PF=1.14
+      Normal   n=472 d=19 win=47% ExpR=+0.030 PF=1.06
+      GapDown  n=154 d=9 win=47% ExpR=+0.029 PF=1.05
+PCR rising                                                             ALL n=2092 d=20 win=46% ExpR=+0.015 PF=1.03 | train n=1253 d=12 win=44% ExpR=-0.022 PF=0.96 | val n=247 d=4 win=53% ExpR=+0.167 PF=1.36 | hold n=592 d=4 win=47% ExpR=+0.029 PF=1.06
+      GapUp    n=896 d=11 win=44% ExpR=-0.023 PF=0.96
+      Normal   n=1007 d=18 win=47% ExpR=+0.044 PF=1.08
+      GapDown  n=189 d=10 win=47% ExpR=+0.036 PF=1.07
+PCR rising & PutOI up & CallOI down                                    ALL n=583 d=17 win=49% ExpR=+0.068 PF=1.13 | train n=307 d=10 win=50% ExpR=+0.104 PF=1.21 | val n=104 d=3 win=48% ExpR=+0.058 PF=1.11 | hold n=172 d=4 win=46% ExpR=+0.010 PF=1.02
+      GapUp    n=316 d=10 win=48% ExpR=+0.058 PF=1.11
+      Normal   n=231 d=15 win=51% ExpR=+0.114 PF=1.23
+      GapDown  n=36 d=4 win=39% ExpR=-0.144 PF=0.76
+lowOpenPCR & PCR rising                                                ALL n=946 d=20 win=46% ExpR=+0.009 PF=1.02 | train n=549 d=12 win=43% ExpR=-0.046 PF=0.92 | val n=128 d=4 win=52% ExpR=+0.134 PF=1.28 | hold n=269 d=4 win=48% ExpR=+0.063 PF=1.12
+      GapUp    n=431 d=10 win=45% ExpR=-0.005 PF=0.99
+      Normal   n=435 d=15 win=47% ExpR=+0.032 PF=1.06
+      GapDown  n=80 d=7 win=44% ExpR=-0.038 PF=0.93
+lowOpenPCR & rising & PutOI up & CallOI down & Ltp rising              ALL n=226 d=15 win=53% ExpR=+0.168 PF=1.36 | train n=118 d=8 win=54% ExpR=+0.193 PF=1.42 | val n=46 d=3 win=48% ExpR=+0.052 PF=1.10 | hold n=62 d=4 win=55% ExpR=+0.206 PF=1.46
+      GapUp    n=130 d=9 win=51% ExpR=+0.117 PF=1.24
+      Normal   n=79 d=9 win=59% ExpR=+0.309 PF=1.76
+      GapDown  n=17 d=3 win=41% ExpR=-0.094 PF=0.84
+lowOpenPCR & PCR falling                                               ALL n=409 d=14 win=44% ExpR=-0.021 PF=0.96 | train n=265 d=9 win=43% ExpR=-0.062 PF=0.89 | val n=133 d=3 win=44% ExpR=-0.024 PF=0.96 | hold n=11 d=2 win=91% ExpR=+1.000 PF=12.00
+      GapUp    n=29 d=7 win=41% ExpR=-0.090 PF=0.85
+      Normal   n=284 d=10 win=44% ExpR=-0.032 PF=0.94
+      GapDown  n=96 d=6 win=47% ExpR=+0.031 PF=1.06
+PCR rising but CallOI up (not bullish)                                 ALL n=1008 d=20 win=43% ExpR=-0.059 PF=0.90 | train n=643 d=12 win=41% ExpR=-0.090 PF=0.85 | val n=93 d=4 win=49% ExpR=+0.088 PF=1.17 | hold n=272 d=4 win=44% ExpR=-0.038 PF=0.93
+      GapUp    n=380 d=11 win=38% ExpR=-0.166 PF=0.73
+      Normal   n=515 d=18 win=45% ExpR=-0.005 PF=0.99
+      GapDown  n=113 d=9 win=48% ExpR=+0.051 PF=1.10

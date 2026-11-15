@@ -330,20 +330,20 @@ public class BrokerOrderSyncWorker : BackgroundService
             // the generic ENTRY/EXIT handling below. Without this, an SL_M rejection here used
             // to flip an otherwise-healthy ACTIVE signal straight to ORDER_REJECTED, pulling a
             // live filled position out of ExitWorker's monitoring entirely.
-            if (order.OrderPurpose == Trading.Domain.OrderPurpose.StopLoss)
+            if (IsRestingStopLoss(order))
             {
                 switch (normalized)
                 {
                     case "COMPLETE":
-                        await tradeCompletion.CompleteExitAsync(signal, order, TradingConst.ExitReason.OptionSlHit);
+                        await tradeCompletion.CompleteExitAsync(signal, order, TradingConst.ExitReason.ForOptionStop(signal.OptionSL, signal.OptionLtp));
                         signal.StopLossOrderId = "";
                         signal.StopLossStatus = "";
                         break;
                     case "REJECTED":
-                        ApplyDeadStopLoss(signal, order, "FAILED");
+                        await ApplyDeadStopLossAsync(signal, order, "FAILED", signalRepo);
                         break;
                     case "CANCELLED":
-                        ApplyDeadStopLoss(signal, order, "CANCELLED");
+                        await ApplyDeadStopLossAsync(signal, order, "CANCELLED", signalRepo);
                         break;
                 }
                 return true;
@@ -368,7 +368,7 @@ public class BrokerOrderSyncWorker : BackgroundService
             }
             else if (normalized is "REJECTED" or "CANCELLED")
             {
-                signal.Status = SignalStatus.OrderRejected;
+                signal.Status = ResolveRejectedOrderStatus(signal, order);
             }
         }
 
@@ -415,20 +415,20 @@ public class BrokerOrderSyncWorker : BackgroundService
         // ORDER_REJECTED. Identified by OrderPurpose, not OrderType — OrderType only says HOW
         // the order executes (SL_M/MARKET/LIMIT); OrderPurpose says WHY it exists, which is what
         // this branch actually needs (and stays correct if a future order type also uses SL_M).
-        if (order.OrderPurpose == Trading.Domain.OrderPurpose.StopLoss)
+        if (IsRestingStopLoss(order))
         {
             switch (normalizedStatus)
             {
                 case "COMPLETE":
-                    await tradeCompletion.CompleteExitAsync(signal, order, TradingConst.ExitReason.OptionSlHit);
+                    await tradeCompletion.CompleteExitAsync(signal, order, TradingConst.ExitReason.ForOptionStop(signal.OptionSL, signal.OptionLtp));
                     signal.StopLossOrderId = "";
                     signal.StopLossStatus = "";
                     break;
                 case "REJECTED":
-                    ApplyDeadStopLoss(signal, order, "FAILED");
+                    await ApplyDeadStopLossAsync(signal, order, "FAILED", signalRepo);
                     break;
                 case "CANCELLED":
-                    ApplyDeadStopLoss(signal, order, "CANCELLED");
+                    await ApplyDeadStopLossAsync(signal, order, "CANCELLED", signalRepo);
                     break;
             }
             return;
@@ -485,8 +485,11 @@ public class BrokerOrderSyncWorker : BackgroundService
 
             case "REJECTED":
 
+                // A rejected EXIT must not be marked ORDER_REJECTED — see
+                // ResolveRejectedOrderStatus. That status is terminal, and applying it to a live
+                // position drops it out of ExitWorker and releases OnePositionGate.
                 signal.Status =
-                    SignalStatus.OrderRejected;
+                    ResolveRejectedOrderStatus(signal, order);
 
                 signal.BrokerOrderStatus =
                     normalizedStatus;
@@ -497,7 +500,7 @@ public class BrokerOrderSyncWorker : BackgroundService
             case "CANCELLED":
 
                 signal.Status =
-                    SignalStatus.OrderRejected;
+                    ResolveRejectedOrderStatus(signal, order);
 
                 signal.BrokerOrderStatus =
                     normalizedStatus;
@@ -555,6 +558,8 @@ public class BrokerOrderSyncWorker : BackgroundService
             signal.OptionLtp = avgPrice;
         }
 
+        ResetExcursionAtFill(signal, avgPrice);
+
         await positionRepo.AddAsync(new Position
         {
             SignalId       = signal.Id,
@@ -571,6 +576,21 @@ public class BrokerOrderSyncWorker : BackgroundService
         });
 
         await PlaceInitialStopLossAsync(signal, orderRepo, signalRepo, orders, uow);
+    }
+
+    /// <summary>
+    /// A position's excursion and locked stop start at the fill: anything recorded earlier (MFE/MAE
+    /// from the pre-fill quote, a ProtectedSL ratcheted against the stale entry) describes a trade
+    /// that did not exist yet. No partial can precede activation, so clearing ProtectedSL is safe.
+    /// </summary>
+    internal static void ResetExcursionAtFill(Signal signal, decimal fillPrice)
+    {
+        if (fillPrice <= 0) return;
+
+        signal.MfePrice = fillPrice;
+        signal.MaePrice = fillPrice;
+        signal.ProtectedSL = 0;
+        signal.IndexT1Hit = false;
     }
 
     /// <summary>
@@ -592,7 +612,7 @@ public class BrokerOrderSyncWorker : BackgroundService
         IOrderService orders,
         IUnitOfWork uow)
     {
-        if (orders.CurrentMode == TradingMode.Paper) return;
+        if (orders.IsPaperSignal(signal)) return;
         if (!TradingConst.IsSingleLegStrategy(signal.StrategyType)) return;
         if (signal.OptionSL <= 0) return;
 
@@ -616,7 +636,54 @@ public class BrokerOrderSyncWorker : BackgroundService
     /// places a SECOND resting SELL against the same position — the double fill the whole
     /// cancel-then-place design exists to prevent.
     /// </summary>
-    private void ApplyDeadStopLoss(Signal signal, Order order, string status)
+    /// <summary>
+    /// True only for a RESTING protective SL_M order — not for the MARKET sell that actually
+    /// closes the position.
+    ///
+    /// Both carry OrderPurpose=STOPLOSS: PositionCloseService.MapExitReasonToPurpose maps
+    /// ExitReason.OptionSlHit to OrderPurpose.StopLoss, so the MARKET fallback exit is tagged
+    /// identically to the resting order it replaces. Routing on purpose alone therefore sent a
+    /// rejected MARKET exit into ApplyDeadStopLoss, which only touches StopLossOrderId/Status and
+    /// never signal.Status — leaving the signal stranded in EXIT_PENDING with ExitTime=NULL.
+    ///
+    /// Observed live on 2026-09-15, signal 60: the SL_M fallback fired after 810s unprotected,
+    /// its MARKET sell (order 394) was REJECTED, and the signal sat in EXIT_PENDING while
+    /// BrokerPositionSyncWorker logged "qty=65 vs broker qty=0" every ~35s until the user closed
+    /// the position by hand. EXIT_PENDING is an open status, so OnePositionGate would also have
+    /// blocked every new signal until it was cleared.
+    ///
+    /// OrderType is the discriminator: SL_M rests at the exchange, MARKET is the exit itself.
+    /// </summary>
+    internal static bool IsRestingStopLoss(Order order)
+        => order.OrderPurpose == Trading.Domain.OrderPurpose.StopLoss
+           && string.Equals(order.OrderType, "SL_M", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Status to apply when a broker order comes back REJECTED/CANCELLED.
+    ///
+    /// ORDER_REJECTED is only correct for an ENTRY — it means no position was ever opened, and it
+    /// is a terminal status, so ExitDataLoader stops loading the signal and OnePositionGate stops
+    /// holding it. Applying it to a rejected EXIT would silently abandon a position that is still
+    /// live at the broker: no trailing, no stop, no force exit, and new signals free to fire.
+    ///
+    /// A rejected exit instead returns the signal to ACTIVE so the exit path retries it on the
+    /// next cycle, which is the state it was in before the exit was attempted.
+    /// </summary>
+    internal static string ResolveRejectedOrderStatus(Signal signal, Order order)
+    {
+        var isExitOrder = !order.Side.Equals("BUY", StringComparison.OrdinalIgnoreCase)
+                          || order.OrderPurpose != Trading.Domain.OrderPurpose.Entry;
+
+        var positionIsLive = signal.Status is SignalStatus.ExitPending
+                                           or SignalStatus.PartialExitPending
+                                           or SignalStatus.Active;
+
+        return isExitOrder && positionIsLive
+            ? SignalStatus.Active
+            : SignalStatus.OrderRejected;
+    }
+
+    private async Task ApplyDeadStopLossAsync(Signal signal, Order order, string status, IRepository<Signal> signalRepo)
     {
         if (!ShouldApplyDeadStopLoss(signal.StopLossOrderId, order.BrokerOrderId))
         {
@@ -627,20 +694,37 @@ public class BrokerOrderSyncWorker : BackgroundService
             return;
         }
 
+        // Conditional UPDATE against the COMMITTED row, not the tracked entity. This worker's copy
+        // of the signal can be seconds old: ExitWorker may have placed a replacement stop in the
+        // meantime, and clearing from the stale copy blanked that live stop's id (2026-09-30,
+        // signal 91) — the system then "recovered" a stop that was still resting and duplicated it.
+        // A broker REJECTED ("FAILED") counts against the retry cap; a CANCELLED is the normal
+        // trailing cancel-then-place and does not.
+        var dead = order.BrokerOrderId ?? "";
+        var failed = status == "FAILED";
+        var rows = await signalRepo.ExecuteUpdateAsync(
+            s => s.Id == signal.Id && (s.StopLossOrderId == dead || s.StopLossOrderId == ""),
+            u =>
+            {
+                u.SetProperty(x => x.StopLossOrderId, "");
+                u.SetProperty(x => x.StopLossStatus, status);
+                if (failed)
+                    u.SetProperty(x => x.StopLossRetryCount, x => x.StopLossRetryCount + 1);
+            });
+
+        if (rows == 0)
+        {
+            _logger.LogInformation(
+                "BrokerOrderSync: SL_M {DeadOrderId} is {Status} for signal {Id} {Symbol}, but a newer stop is already committed — leaving it intact",
+                order.BrokerOrderId, status, signal.Id, signal.Symbol);
+            return;
+        }
+
+        // Mirror the committed values on the tracked entity so this cycle's save writes the same.
         signal.StopLossOrderId = "";
         signal.StopLossStatus = status;
-
-        // A broker REJECTED (mapped to "FAILED" by the caller) is a failed placement and must
-        // count against the retry cap. StopLossOrderCoordinator.MarkPlacedAsync resets the count
-        // to 0 the moment the broker ACCEPTS the order, but a rejection arrives asynchronously
-        // here — so without this the count never leaves 0, the cap in TryPlaceAsync never
-        // engages, and a permanently un-placeable stop (e.g. inside the broker's MIS square-off
-        // window) re-places forever. "CANCELLED" is deliberately excluded: that is also the
-        // normal trailing cancel-then-place path, which must not burn the cap.
-        if (status == "FAILED")
-        {
+        if (failed)
             signal.StopLossRetryCount++;
-        }
     }
 
     /// <summary>

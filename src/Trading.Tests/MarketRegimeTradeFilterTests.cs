@@ -27,11 +27,18 @@ public class MarketRegimeTradeFilterTests
         Assert.True(MarketRegimeService.IsTradeAllowed(Regime(trend, MarketVolatility.High)));
     }
 
-    [Theory]
-    [InlineData(MarketVolatility.Low)]
-    [InlineData(MarketVolatility.Extreme)]
-    public void UnsafeVolatility_IsRejected_EvenWhenTrending(MarketVolatility vol)
+    [Fact]
+    public void LowVolatility_IsRejected_EvenWhenTrending()
     {
-        Assert.False(MarketRegimeService.IsTradeAllowed(Regime(MarketTrend.Uptrend, vol)));
+        Assert.False(MarketRegimeService.IsTradeAllowed(Regime(MarketTrend.Uptrend, MarketVolatility.Low)));
+    }
+
+    [Fact]
+    public void ExtremeVolatility_PassesThisGate_AndIsLeftToStrategyFilters()
+    {
+        // Decision: IsTradeAllowed no longer blocks Extreme (only Low is dead-market protection).
+        // Extreme is handled downstream - StrategySelectorService (Sideways/Extreme) and the
+        // MarketClassificationService extreme-ATR check.
+        Assert.True(MarketRegimeService.IsTradeAllowed(Regime(MarketTrend.Uptrend, MarketVolatility.Extreme)));
     }
 }

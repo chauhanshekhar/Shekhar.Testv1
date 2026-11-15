@@ -12,6 +12,7 @@ public class TradingDbContext : DbContext
     public DbSet<DailyPnL> DailyPnL => Set<DailyPnL>();
     public DbSet<MarketTick> MarketTicks => Set<MarketTick>();
     public DbSet<OptionChainData> OptionChainData => Set<OptionChainData>();
+    public DbSet<OptionMinuteHistory> OptionMinuteHistory => Set<OptionMinuteHistory>();
     public DbSet<PaperTrade> PaperTrades => Set<PaperTrade>();
     public DbSet<Portfolio> Portfolios => Set<Portfolio>();
     public DbSet<Position> Positions => Set<Position>();
@@ -49,6 +50,7 @@ public class TradingDbContext : DbContext
 
         mb.Entity<Signal>(e =>
         {
+            e.Property(s => s.Rsi5mAtEntry).HasPrecision(18, 4);
             e.Property(s => s.Symbol).HasMaxLength(50).IsRequired();
             e.Property(s => s.SignalType).HasMaxLength(10).IsRequired();
             e.Property(s => s.EntryPrice).HasPrecision(18, 2);
@@ -178,6 +180,30 @@ public class TradingDbContext : DbContext
              .HasDatabaseName("IX_OptionChainData_Symbol_ExpiryDate");
         });
 
+        // Per-minute copy of the ATM±5 chain for backtesting (see OptionMinuteHistory). Analysis only.
+        mb.Entity<OptionMinuteHistory>(e =>
+        {
+            e.ToTable("OptionMinuteHistory");
+            e.Property(o => o.Symbol).HasMaxLength(20).IsRequired();
+            e.Property(o => o.TradingSymbol).HasMaxLength(50).IsRequired();
+            e.Property(o => o.OptionType).HasMaxLength(2).IsRequired();
+            e.Property(o => o.StrikePrice).HasPrecision(18, 2);
+            e.Property(o => o.Ltp).HasPrecision(18, 2);
+            e.Property(o => o.UnderlyingLtp).HasPrecision(18, 2);
+            e.Property(o => o.ImpliedVolatility).HasPrecision(18, 4);
+            e.Property(o => o.Delta).HasPrecision(10, 6);
+
+            // One row per leg per minute: makes the per-minute write idempotent, and serves the
+            // backtest's read pattern (WHERE Symbol=? AND MinuteTime BETWEEN ? AND ?).
+            e.HasIndex(o => new { o.Symbol, o.MinuteTime, o.TradingSymbol })
+             .IsUnique()
+             .HasDatabaseName("UX_OptionMinuteHistory_Symbol_Minute_Leg");
+
+            // Retention delete (WHERE MinuteTime < cutoff)
+            e.HasIndex(o => o.MinuteTime)
+             .HasDatabaseName("IX_OptionMinuteHistory_MinuteTime");
+        });
+
         mb.Entity<DailyPnL>(e =>
         {
             e.Property(d => d.TotalProfit).HasPrecision(18, 2);
@@ -196,6 +222,7 @@ public class TradingDbContext : DbContext
 
         mb.Entity<TradeJournal>(e =>
         {
+            e.Property(j => j.Rsi5mAtEntry).HasPrecision(18, 4);
             e.Property(t => t.Symbol).HasMaxLength(50).IsRequired();
             e.Property(t => t.EntryPrice).HasPrecision(18, 2);
             e.Property(t => t.ExitPrice).HasPrecision(18, 2);
@@ -422,6 +449,8 @@ public class TradingDbContext : DbContext
             e.Property(s => s.Ema50).HasPrecision(18, 4);
             e.Property(s => s.Ema20_5m).HasPrecision(18, 4);
             e.Property(s => s.Ema50_5m).HasPrecision(18, 4);
+            e.Property(s => s.Ema9).HasPrecision(18, 4);
+            e.Property(s => s.Ema21).HasPrecision(18, 4);
 
             e.Property(s => s.Rsi).HasPrecision(18, 4);
             e.Property(s => s.Rsi5m).HasPrecision(18, 4);

@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using Trading.Application.Interfaces;
 using Trading.Domain;
 using Trading.Domain.Entities;
@@ -73,10 +73,27 @@ public class StrategyManager
         _logger = logger;
     }
 
+    internal static bool ShouldBlockRangeMarket(MarketState state, bool blockRange)
+        => blockRange && state == MarketState.Range;
+
     public async Task<SignalSelectionResult> SelectSignalAsync(SignalContext ctx, MarketSnapshot market, string symbol)
     {
         var strategyContext = await BuildStrategyContextAsync(ctx, market, symbol);
         var decision = await _selector.Select(strategyContext);
+
+        // Early-cross CALL (paper only, off by default): evaluated BEFORE the Range block so it can act in the first minutes of
+        // a turn the selector still labels Range/Reversal. Returns null in every other case (flag off, not Paper, no match).
+        var earlySignal = TryGenerateEarlyCrossSignal(ctx, market, symbol, out var earlyRuleId);
+
+        // Range = no clear trend: no trade at all. The selector already yields "no strategy" for Range on normal days,
+        // but that alone still reaches the approved-rule fallback below and is bypassed on expiry days (the selector
+        // dispatches those by time of day), so the state is stopped here, before either. Switch: BlockRangeMarketState
+        // (default on; an active row with value 0 turns it off).
+        if (earlySignal is null && ShouldBlockRangeMarket(decision.MarketState, ctx.StrategySettings.GetBool("BlockRangeMarketState", symbol, true)))
+        {
+            return new SignalSelectionResult(null, decision.MarketState, decision.Strategy, 0m,
+                $"MarketState=Range - no trade ({strategyContext.MarketStateReason})", "StrategySelector");
+        }
 
         var engineResult = decision.Strategy switch
         {
@@ -93,6 +110,11 @@ public class StrategyManager
 
         var signal = engineResult.Signal;
         string? ruleId = null;
+        if (signal == null && earlySignal != null)
+        {
+            signal = earlySignal;
+            ruleId = earlyRuleId;
+        }
 
         // ── 5-minute market confirmation ─────────────────────────────────────────────────────
         // Applied HERE, the single point every path converges on — Directional, HeroZero and the
@@ -206,13 +228,49 @@ public class StrategyManager
                 lotDecision.Reason, blockedBy);
         }
         signal.Quantity = lotDecision.Lots;
-        signal.SelectedStrategy = decision.Strategy.ToString();
+        signal.SelectedStrategy = ruleId == EarlyCrossCallRuleEvaluator.RuleId
+            ? EarlyCrossCallRuleEvaluator.StrategyTag
+            : decision.Strategy.ToString();
         signal.MarketState = decision.MarketState.ToString();
         signal.IsExpiryDay = strategyContext.IsExpiryDay;
 
         await LogExecutionAsync(symbol, strategyContext, decision, signal, ruleId);
 
         return new SignalSelectionResult(signal, decision.MarketState, decision.Strategy, signal.Confidence, null, null, ruleId);
+    }
+
+    // ── Early-cross CALL (paper only) ─────────────────────────────────────────────────────────
+    // One settings lookup per cycle when the flag is off (the default). Uses the last closed 1m bar as the trigger on purpose:
+    // the default trigger candle in Paper is the 5m bar, but the tested rule is a 1m-turn rule.
+    private Signal? TryGenerateEarlyCrossSignal(SignalContext ctx, MarketSnapshot market, string symbol, out string? ruleId)
+    {
+        ruleId = null;
+        if (!_ruleEvaluator.IsEarlyCrossEnabled(symbol))
+            return null;
+
+        var bar = market.LastClosed1mCandle;
+        var input = new EarlyCrossInput(
+            ctx.Orders?.CurrentMode == TradingMode.Paper,
+            EarlyCrossCallRuleEvaluator.BarsSince1mUp(market.Candles1m),
+            market.Ltp, market.Ema20, market.Ema50, market.Ema20_5m, market.Ema50_5m, market.Rsi5m,
+            bar is not null && bar.Close > bar.Open);
+
+        var match = _ruleEvaluator.EvaluateEarlyCross(symbol, input);
+        if (!match.Matched)
+        {
+            _logger.LogDebug("EARLY CROSS SUPPRESSED Symbol={Symbol} Reason={Reason}", symbol, match.Reason);
+            return null;
+        }
+
+        var result = ctx.Engine.GenerateRuleSignal(
+            symbol, match.OptionType!, match.Call, market.Ltp, market.Ema20, market.Ema50, market.PcrValue, market.Rsi,
+            market.CurrentVolume, market.AvgVolume20, market.AtrRaw, market.OptionChain, bar, out _);
+
+        if (result.Signal == null)
+            return null;
+
+        ruleId = match.RuleId;
+        return result.Signal;
     }
 
     // ── Approved single-signal rule evaluation ───────────────────────────────────────────────
@@ -434,7 +492,10 @@ public class StrategyManager
             dayOpen: market.DayOpen,
             dayLow: market.DayLow,
             dayHigh: market.DayHigh,
-            dayChangePct: market.DayChangePct);
+            dayChangePct: market.DayChangePct,
+            // Entry RSI = 5m RSI(14) on closed bars; null fails the RSI condition closed.
+            rsi5m: market.Rsi5m,
+            yesterdayClose: market.YesterdayClose);
     }
 
     private async Task<SignalGenerationResult> RunHeroZero(SignalContext ctx, MarketSnapshot market, string symbol)
@@ -466,7 +527,7 @@ public class StrategyManager
             {
                 CreatedOn = IstClock.Now,
                 Symbol = symbol,
-                SelectedStrategy = decision.Strategy.ToString(),
+                SelectedStrategy = signal.SelectedStrategy ?? decision.Strategy.ToString(),
                 MarketState = decision.MarketState.ToString(),
                 Reason = explainable,
                 Score = signal.Confidence

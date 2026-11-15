@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Trading.Application.Interfaces;
 using Trading.Domain;
@@ -137,6 +137,27 @@ public class SignalEngineService
         return Math.Min(score, 99m);
     }
 
+    /// <summary>
+    /// The RSI band ComputeConfidence scores against. It is the entry-gate band (condition 5 of
+    /// CallEntryEvaluator / PutEntryEvaluator), read with the same compiled defaults, so each side
+    /// has exactly one RSI band. Both signal paths use this, so they cannot drift apart.
+    /// </summary>
+    private (decimal CallFloor, decimal CallCeiling, decimal PutFloor, decimal PutCeiling) RsiConfidenceBand(string symbol) =>
+        (_strategySettings.GetDecimal("CallRsiFloor", symbol, 60m),
+         _strategySettings.GetDecimal("CallRsiCeiling", symbol, 70m),
+         _strategySettings.GetDecimal("PutRsiFloor", symbol, 28m),
+         _strategySettings.GetDecimal("PutRsiCeiling", symbol, 40m));
+
+    /// <summary>
+    /// IsActive = 0 on either half of the side's band means the RSI confidence contribution does
+    /// not apply - see the comment inside ComputeConfidence. Deliberately NOT tied to
+    /// EnableRsiFilter: that flag switches the PUT entry condition, not the confidence score.
+    /// </summary>
+    private bool IsRsiConfidenceActive(string symbol, bool call) =>
+        call
+            ? _strategySettings.IsSettingActive("CallRsiFloor", symbol) && _strategySettings.IsSettingActive("CallRsiCeiling", symbol)
+            : _strategySettings.IsSettingActive("PutRsiFloor", symbol) && _strategySettings.IsSettingActive("PutRsiCeiling", symbol);
+
     private bool IsLiquid(string symbol, OptionChainData o)
     {
         var minVolume = Settings.LiquidityMinVolume.GetValueOrDefault(symbol, 50_000);
@@ -165,11 +186,12 @@ public class SignalEngineService
         string strategyHint = TradingConst.StrategyType.Auto,
         decimal ema20_5m = 0,
         decimal ema50_5m = 0,
-        Candle? lastClosedCandle = null)
+        Candle? lastClosedCandle = null,
+        decimal? rsi5m = null)
         => GenerateSignalDetailed(
             symbol, ltp, ema20, ema50, pcr, rsi, currentVolume, avgVolume20,
             priceChangePct, atrPct, atrRaw, optionChain, strategyHint,
-            ema20_5m, ema50_5m, lastClosedCandle).Signal;
+            ema20_5m, ema50_5m, lastClosedCandle, rsi5m: rsi5m).Signal;
 
     // Same decision logic as GenerateSignal — additionally reports every failed condition
     // (instead of a bare null) so callers can audit/log exactly why a signal did not fire.
@@ -203,7 +225,14 @@ public class SignalEngineService
         decimal dayOpen = 0,
         decimal dayLow = 0,
         decimal dayHigh = 0,
-        decimal dayChangePct = 0)
+        decimal dayChangePct = 0,
+        // Entry RSI: 5-minute RSI(14) on closed 5m bars (MarketSnapshot.Rsi5m). Null means fewer
+        // than 15 closed 5m bars exist and the CALL/PUT RSI condition FAILS CLOSED - null is never
+        // read as 50. `rsi` (1m) is kept for confidence scoring only.
+        decimal? rsi5m = null,
+        // Previous session close, used ONLY by the opening-conditional RSI band (condition 5).
+        // 0 = unknown, which disables that override and leaves the normal band in force.
+        decimal yesterdayClose = 0)
     {
         // No chain data = no delta confirmation = no signal.
         if (optionChain == null || optionChain.Count == 0)
@@ -230,17 +259,13 @@ public class SignalEngineService
         var body = Math.Abs(lastClosedCandle.Close - lastClosedCandle.Open);
         var bodyPct = body / range * 100m;
 
-        // CONFIDENCE-ONLY settings. These are the LEGACY bands: ComputeConfidence still scores
-        // against RsiCallFloor/Ceiling, RsiPutFloor/Ceiling and BodyPctMinimum, which are NOT the
-        // same keys the entry chains now read (CallRsiFloor..., PutRsiFloor..., Call/PutBodyPct-
-        // Minimum). They are deliberately left separate: the entry specification changed, the
-        // confidence formula did not, and silently repointing the score at the new thresholds
-        // would move every lot-sizing tier without any measurement behind it.
+        // CONFIDENCE-ONLY settings. The RSI band is the SAME Call/PutRsiFloor/Ceiling pair the
+        // entry chains gate on (condition 5), with the same compiled defaults - one band per side,
+        // so tuning RSI can no longer hit a look-alike key that only moves lot sizing. The legacy
+        // RsiCallFloor/Ceiling and RsiPutFloor/Ceiling keys are no longer read anywhere.
+        // BodyPctMinimum is still the legacy candle-quality key and is intentionally unchanged.
         var bodyPctMinimum = _strategySettings.GetDecimal("BodyPctMinimum", symbol, 30m);
-        var rsiCallFloor   = _strategySettings.GetDecimal("RsiCallFloor", symbol, 53m);
-        var rsiCallCeiling = _strategySettings.GetDecimal("RsiCallCeiling", symbol, 70m);
-        var rsiPutFloor    = _strategySettings.GetDecimal("RsiPutFloor", symbol, 28m);
-        var rsiPutCeiling  = _strategySettings.GetDecimal("RsiPutCeiling", symbol, 45m);
+        var (rsiCallFloor, rsiCallCeiling, rsiPutFloor, rsiPutCeiling) = RsiConfidenceBand(symbol);
 
         // -- ATM strike + liquid legs ------------------------------------------------------------
         var interval = (decimal)_instrumentCache.GetStrikeInterval(symbol);
@@ -290,11 +315,12 @@ public class SignalEngineService
         // returns a DirectionVerdict carrying BOTH the pass/fail and the labelled checks, so the
         // expression and its explanation cannot drift apart.
         var inputs = new EntryMarketInputs(
-            Ltp: ltp, Ema20: ema20, Ema50: ema50, Rsi: rsi, Pcr: pcr, AtrPct: atrPct,
+            Ltp: ltp, Ema20: ema20, Ema50: ema50, Rsi: rsi, Rsi5m: rsi5m, Pcr: pcr, AtrPct: atrPct,
             PriceChangePct: priceChangePct,
             CurrentVolume: currentVolume, AvgVolume20: avgVolume20,
             Vwap: vwap, Prev5mHigh: prev5mHigh, Prev5mLow: prev5mLow,
             DayOpen: dayOpen, DayLow: dayLow, DayHigh: dayHigh, DayChangePct: dayChangePct,
+            YesterdayClose: yesterdayClose,
             CeAtmDelta: ceAtmDelta, PeAtmDelta: peAtmDelta,
             CeChangeInOi: atmCe.ChangeInOi, PeChangeInOi: atmPe.ChangeInOi,
             TrendBullish: trendBullish, TrendBearish: trendBearish,
@@ -321,9 +347,7 @@ public class SignalEngineService
 
         // IsActive=0 on either half of the relevant RSI band means the RSI confidence
         // contribution does not apply - see the comment inside ComputeConfidence.
-        var rsiConfidenceActive = call
-            ? _strategySettings.IsSettingActive("RsiCallFloor", symbol) && _strategySettings.IsSettingActive("RsiCallCeiling", symbol)
-            : _strategySettings.IsSettingActive("RsiPutFloor", symbol) && _strategySettings.IsSettingActive("RsiPutCeiling", symbol);
+        var rsiConfidenceActive = IsRsiConfidenceActive(symbol, call);
 
         // NOTE: parameter order here previously mismatched ComputeConfidence's signature (bodyPct,
         // rsiCallFloor, rsiCallCeiling, rsiPutFloor, rsiPutCeiling, bodyPctMinimum -- bodyPctMinimum
@@ -359,11 +383,68 @@ public class SignalEngineService
     /// evaluator resolves its own from IStrategySettingsService (an in-memory cache), so a
     /// direction's specification lives in exactly one place.
     /// </summary>
-    private readonly record struct EntryMarketInputs(
+    /// <summary>
+    /// The RSI band for this session, after any opening-conditional override.
+    ///
+    /// The live band is one pair for every session, but a gap-up session runs at a higher RSI than a
+    /// flat one - on the stored history RSI >= 70 was the strongest 30-minute up-drift (+0.53 ATR,
+    /// 59% up) and the CALL ceiling of 65 excludes it. These settings let each opening carry its own
+    /// band. ALL OFF BY DEFAULT: with EnableOpeningRsiBand = 0, or no override rows, this returns the
+    /// normal band unchanged and the entry chain behaves exactly as before.
+    ///
+    ///   EnableOpeningRsiBand   0/1                                   (default 0)
+    ///   OpeningRsiGapPct       gap % separating the openings          (default 0.30)
+    ///   GapUpCallRsiFloor / GapUpCallRsiCeiling     CALL on a gap-up session
+    ///   GapUpPutRsiFloor  / GapUpPutRsiCeiling      PUT  on a gap-up session
+    ///   GapDownCallRsiFloor / GapDownCallRsiCeiling CALL on a gap-down session
+    ///   GapDownPutRsiFloor  / GapDownPutRsiCeiling  PUT  on a gap-down session
+    ///
+    /// An override applies only when BOTH its floor and ceiling rows exist and are active, so a half
+    /// configured pair can never silently widen one end of the band.
+    /// </summary>
+    private (decimal Floor, decimal Ceiling) OpeningRsiBand(
+        string symbol, bool call, decimal floor, decimal ceiling, in EntryMarketInputs m)
+    {
+        if (!_strategySettings.GetBool("EnableOpeningRsiBand", symbol, false))
+            return (floor, ceiling);
+        if (m.DayOpen <= 0 || m.YesterdayClose <= 0)
+            return (floor, ceiling);
+
+        var gapPct = (m.DayOpen - m.YesterdayClose) / m.YesterdayClose * 100m;
+        var threshold = _strategySettings.GetDecimal("OpeningRsiGapPct", symbol, 0.30m);
+
+        var prefix = gapPct >= threshold ? "GapUp"
+                   : gapPct <= -threshold ? "GapDown"
+                   : null;
+        if (prefix is null) return (floor, ceiling);      // normal open keeps the live band
+
+        var floorKey = $"{prefix}{(call ? "Call" : "Put")}RsiFloor";
+        var ceilingKey = $"{prefix}{(call ? "Call" : "Put")}RsiCeiling";
+        if (!_strategySettings.IsSettingActive(floorKey, symbol)
+            || !_strategySettings.IsSettingActive(ceilingKey, symbol))
+            return (floor, ceiling);
+
+        return (_strategySettings.GetDecimal(floorKey, symbol, floor),
+                _strategySettings.GetDecimal(ceilingKey, symbol, ceiling));
+    }
+
+    /// <summary>
+    /// True when the session opened at least OpeningRsiGapPct (default 0.30%) above the previous close - the same gap definition
+    /// OpeningRsiBand uses. False when DayOpen or YesterdayClose is missing, so an unclassifiable gap never skips a filter.
+    /// </summary>
+    private bool IsGapUpSession(string symbol, in EntryMarketInputs m)
+    {
+        if (m.DayOpen <= 0 || m.YesterdayClose <= 0) return false;
+        var gapPct = (m.DayOpen - m.YesterdayClose) / m.YesterdayClose * 100m;
+        return gapPct >= _strategySettings.GetDecimal("OpeningRsiGapPct", symbol, 0.30m);
+    }
+
+    internal readonly record struct EntryMarketInputs(
         decimal Ltp,
         decimal Ema20,
         decimal Ema50,
         decimal Rsi,
+        decimal? Rsi5m,
         decimal Pcr,
         decimal AtrPct,
         decimal PriceChangePct,
@@ -376,6 +457,8 @@ public class SignalEngineService
         decimal DayLow,
         decimal DayHigh,
         decimal DayChangePct,
+        /// <summary>Previous session close, for the opening-gap classification in condition 5.</summary>
+        decimal YesterdayClose,
         decimal CeAtmDelta,
         decimal PeAtmDelta,
         long CeChangeInOi,
@@ -394,7 +477,7 @@ public class SignalEngineService
     /// StrongTrend" as a CALL blocker while that condition was commented out of the expression,
     /// and a live diagnosis was misread as a result.
     /// </summary>
-    private readonly record struct DirectionVerdict((string Label, bool Passed)[] Checks)
+    internal readonly record struct DirectionVerdict((string Label, bool Passed)[] Checks)
     {
         public bool Passed => Checks.All(c => c.Passed);
 
@@ -429,7 +512,7 @@ public class SignalEngineService
     /// Missing inputs FAIL CLOSED - a 0 prev5mHigh or dayLow yields no CALL, because "unknown"
     /// must never read as "confirmed" on a live account.
     /// </summary>
-    private DirectionVerdict EvaluateCall(string symbol, in EntryMarketInputs m)
+    internal DirectionVerdict EvaluateCall(string symbol, in EntryMarketInputs m)
     {
         var conditions = new List<(string Description, bool Passed)>();
 
@@ -454,6 +537,10 @@ public class SignalEngineService
                 m.Ltp > m.Ema20));
         }
 
+        // 2b: EMA gap (shared CALL/PUT condition, off by default - see EmaGapCondition).
+        if (EmaGapCondition.Evaluate(m.Ema20, m.Ema50, Enabled, Active, Threshold) is { } emaGap)
+            conditions.Add(emaGap);
+
         // 3 - LTP > VWAP. Not wired: Groww publishes no index candle volume, so Vwap is NULL on
         // every row (verified 2026-09-02: 328,092 of 328,092) and every Candle.Volume is 0.
         // Wiring this live would suppress every CALL forever - it needs a volume-bearing feed.
@@ -469,23 +556,25 @@ public class SignalEngineService
         // 5: RSI
         if (Active("CallRsiFloor")&& Active("CallRsiCeiling"))
         {
-            var floor = Threshold("CallRsiFloor", 60m);
-            var ceiling = Threshold("CallRsiCeiling", 70m);
+            var (floor, ceiling) = OpeningRsiBand(
+                symbol, call: true, Threshold("CallRsiFloor", 60m), Threshold("CallRsiCeiling", 70m), m);
 
-            var passed = m.Rsi >= floor && m.Rsi <= ceiling;
-            var description = $"5 RSI in [{floor},{ceiling}]";
+            // Entry RSI is the 5m RSI(14). Null (fewer than 15 closed 5m bars) fails closed.
+            var rsi5m = m.Rsi5m;
+            var passed = rsi5m.HasValue && rsi5m.Value >= floor && rsi5m.Value <= ceiling;
+            var description = $"5 5m RSI in [{floor},{ceiling}]";
 
             if (Active("RsiCallPullbackFloor")&& Active("RsiCallPullbackCeiling"))
             {
                 var pullbackFloor = Threshold("RsiCallPullbackFloor", 30m);
                 var pullbackCeiling = Threshold("RsiCallPullbackCeiling", 40m);
 
-                passed |= m.Rsi >= pullbackFloor && m.Rsi <= pullbackCeiling;
+                passed |= rsi5m.HasValue && rsi5m.Value >= pullbackFloor && rsi5m.Value <= pullbackCeiling;
                 description += $" or [{pullbackFloor},{pullbackCeiling}]";
             }
 
             conditions.Add((
-                $"{description} - was {m.Rsi:F2}",
+                $"{description} - 5m RSI was {(rsi5m.HasValue ? rsi5m.Value.ToString("F2") : "N/A")} (1m RSI {m.Rsi:F2}, not used for entry)",
                 passed));
         }
 
@@ -548,13 +637,25 @@ public class SignalEngineService
         // 12: PCR - off by default (EnableCallPcrFilter). Historically counter-indicated on the
         // closed trades analysed (CALL winners averaged PCR 0.90, losers 1.17), so this must be
         // turned on deliberately per symbol after a fresh backtest.
-        if (Active("CallPcrMinimum"))
+        // Not checked on a gap-up session (same gap definition as OpeningRsiBand); a missing gap counts as not gap-up.
+        if (Enabled("EnableCallPcrFilter", false) && Active("CallPcrMinimum") && !IsGapUpSession(symbol, m))
         {
             var minimum = Threshold("CallPcrMinimum", 1.05m);
 
             conditions.Add((
                 $"12 PCR >= {minimum} - was {m.Pcr:F3}",
                 m.Pcr >= minimum));
+        }
+
+        // 12b: PCR ceiling - CALL only, applies once a CallPcrMaximum row exists and is active (no Enable flag; an
+        // unconfigured key is off). 1.5 is the compiled default if a row carries no usable value.
+        if (Active("CallPcrMaximum"))
+        {
+            var maximum = Threshold("CallPcrMaximum", 1.5m);
+
+            conditions.Add((
+                $"12b PCR <= {maximum} - was {m.Pcr:F3}",
+                m.Pcr <= maximum));
         }
 
         // 13: Open-interest change
@@ -593,6 +694,7 @@ public class SignalEngineService
     ///   5 RSI PutRsiFloor..Ceiling   10 |PE Delta| in [PutDeltaMinimum(0.35), PutDeltaMaximum(0.65)]
     ///   6 Bearish candle            11 DayChange% &lt; max OR (Fall% > min AND LTP &lt; DayOpen)
     ///                               12 PCR &lt;= PutPcrMaximum (off by default - see condition 12)
+    ///                              12b PCR &gt;= PutPcrMinimum (off by default - see condition 12b)
     ///
     /// Fall% = (DayHigh - LTP) / DayHigh * 100.
     ///
@@ -600,7 +702,7 @@ public class SignalEngineService
     /// an ATM PE), so the band is applied to the ABSOLUTE value. Comparing the raw negative
     /// against a positive band would reject every put ever quoted.
     /// </summary>
-    private DirectionVerdict EvaluatePut(string symbol, in EntryMarketInputs m)
+    internal DirectionVerdict EvaluatePut(string symbol, in EntryMarketInputs m)
     {
         var conditions = new List<(string Description, bool Passed)>();
 
@@ -625,6 +727,11 @@ public class SignalEngineService
                 m.Ltp < m.Ema20));
         }
 
+        // 2b: EMA gap (shared CALL/PUT condition, off by default - see EmaGapCondition).
+        if (EmaGapCondition.Evaluate(m.Ema20, m.Ema50, Enabled, Active, Threshold) is { } emaGap)
+            conditions.Add(emaGap);
+
+
         // 3 - LTP < VWAP. Not wired for the same reason as the CALL side: no index volume means
         // no VWAP to compare against.
 
@@ -640,13 +747,29 @@ public class SignalEngineService
         if (Active("PutRsiFloor")
             && Active("PutRsiCeiling"))
         {
-            var floor = Threshold("PutRsiFloor", 28m);
-            var ceiling = Threshold("PutRsiCeiling", 40m);
+            var (floor, ceiling) = OpeningRsiBand(
+                symbol, call: false, Threshold("PutRsiFloor", 28m), Threshold("PutRsiCeiling", 40m), m);
 
-            var passed = m.Rsi >= floor && m.Rsi <= ceiling;
-            var description = $"5 RSI in [{floor},{ceiling}]";
+            // Entry RSI is the 5m RSI(14). Null (fewer than 15 closed 5m bars) fails closed.
+            var rsi5m = m.Rsi5m;
+            var passed = rsi5m.HasValue && rsi5m.Value >= floor && rsi5m.Value <= ceiling;
+            var description = $"5 5m RSI in [{floor},{ceiling}]";
+            // Optional second PUT band (EnablePutRsiBand2, off by default, per-symbol capable).
+            // Widens the accepted RSI to the union of [floor,ceiling] and [Band2Floor,Band2Ceiling]
+            // without touching the 35-39 gap between them.
+            if (Enabled("EnablePutRsiBand2", false)
+                && Active("PutRsiBand2Floor")
+                && Active("PutRsiBand2Ceiling"))
+            {
+                var band2Floor = Threshold("PutRsiBand2Floor", 40m);
+                var band2Ceiling = Threshold("PutRsiBand2Ceiling", 49m);
+
+                passed |= rsi5m.HasValue && rsi5m.Value >= band2Floor && rsi5m.Value <= band2Ceiling;
+                description += $" or [{band2Floor},{band2Ceiling}]";
+            }
+
             conditions.Add((
-                $"{description} - was {m.Rsi:F2}",
+                $"{description} - 5m RSI was {(rsi5m.HasValue ? rsi5m.Value.ToString("F2") : "N/A")} (1m RSI {m.Rsi:F2}, not used for entry)",
                 passed));
         }
 
@@ -711,13 +834,25 @@ public class SignalEngineService
         // 12: PCR - off by default (EnablePutPcrFilter). On the closed trades analysed, PUT
         // winners/losers overlapped almost completely on PCR, so this discriminated nothing;
         // enable per symbol only after a fresh backtest supports it.
-        if (Active("PutPcrMaximum"))
+        if (Enabled("EnablePutPcrFilter", false) && Active("PutPcrMaximum"))
         {
             var maximum = Threshold("PutPcrMaximum", 0.90m);
 
             conditions.Add((
                 $"12 PCR <= {maximum} - was {m.Pcr:F3}",
                 m.Pcr <= maximum));
+        }
+
+        // 12b: PCR floor - applies only where PutPcrMinimum has an active row. Meant per symbol:
+        // on 2026-09-30 SENSEX PUT trend minutes with PCR < 0.70 lost (212 trades, 7 days, PF 0.50)
+        // while BANKNIFTY and NIFTY did not (docs/research/2026-09-30-backtest-condition-put).
+        if (Enabled("EnablePutPcrFilter", false) && Active("PutPcrMinimum"))
+        {
+            var minimum = Threshold("PutPcrMinimum", 0.70m);
+
+            conditions.Add((
+                $"12b PCR >= {minimum} - was {m.Pcr:F3}",
+                m.Pcr >= minimum));
         }
 
         // 13: Open-interest change. See the CALL side for why this defaults to the -1000
@@ -811,14 +946,9 @@ public class SignalEngineService
         }
 
         var bodyPctMinimum = _strategySettings.GetDecimal("BodyPctMinimum", symbol, 35m);
-        var rsiCallFloor   = _strategySettings.GetDecimal("RsiCallFloor", symbol, 55m);
-        var rsiCallCeiling = _strategySettings.GetDecimal("RsiCallCeiling", symbol, 70m);
-        var rsiPutFloor    = _strategySettings.GetDecimal("RsiPutFloor", symbol, 30m);
-        var rsiPutCeiling  = _strategySettings.GetDecimal("RsiPutCeiling", symbol, 45m);
+        var (rsiCallFloor, rsiCallCeiling, rsiPutFloor, rsiPutCeiling) = RsiConfidenceBand(symbol);
 
-        var rsiConfidenceActive = call
-            ? _strategySettings.IsSettingActive("RsiCallFloor", symbol) && _strategySettings.IsSettingActive("RsiCallCeiling", symbol)
-            : _strategySettings.IsSettingActive("RsiPutFloor", symbol) && _strategySettings.IsSettingActive("RsiPutCeiling", symbol);
+        var rsiConfidenceActive = IsRsiConfidenceActive(symbol, call);
 
         confidence = ComputeConfidence(
             call, ema20, ema50, ltp, pcr, rsi, currentVolume, avgVolume20, bodyPct,
@@ -889,11 +1019,24 @@ public class SignalEngineService
         if (delta <= 0)
             delta = 0.45m;
 
+        // stopDistance comes back from AtrRiskService ALREADY CLAMPED to
+        // [MinimumIndexStopPoints, MaximumIndexStopPoints]. Targets must be derived from that
+        // clamped distance, not from raw ATR, or the two legs scale differently and R:R silently
+        // drifts away from the configured AtrTarget/AtrStopLoss ratio whenever the clamp binds.
+        //
+        // Previously the targets used `atrRaw * AtrTargetNMultiplier * delta` while risk used the
+        // clamped stop. Below AtrRaw 13.33 (= MinimumIndexStopPoints / AtrStopLossMultiplier) the
+        // floor widened the stop but left the targets untouched, pushing R:R under 2.0 and making
+        // RiskRewardGate unsatisfiable. That covered 99.1% of observed NIFTY snapshots.
         var stopDistance = Math.Abs(ltp - sl);
 
+        var stopMultiplier = Settings.AtrStopLossMultiplier > 0
+            ? Settings.AtrStopLossMultiplier
+            : 1.5m;
+
         var optionRisk = stopDistance * delta;
-        var optionTarget1 = atrRaw * Settings.AtrTarget1Multiplier * delta;
-        var optionTarget2 = atrRaw * Settings.AtrTarget2Multiplier * delta;
+        var optionTarget1 = stopDistance * (Settings.AtrTarget1Multiplier / stopMultiplier) * delta;
+        var optionTarget2 = stopDistance * (Settings.AtrTarget2Multiplier / stopMultiplier) * delta;
 
         optionSL = Math.Round(optionLtp - optionRisk, 2);
 
@@ -923,8 +1066,11 @@ public class SignalEngineService
                 t1,
                 t2)
 
+            // The TRADED leg's strike, not atmStrike: the liquid leg can be a neighbouring strike
+            // (round strikes carry the volume), and storing atmStrike made StrikePrice disagree
+            // with OptionSymbol/OptionLtp on 15 of 86 signals (e.g. 124: 54400 vs 54500PE).
             .ForOption(
-                atmStrike,
+                chainLeg.StrikePrice,
                 optionType,
                 optionSymbol,
                 optionLtp,

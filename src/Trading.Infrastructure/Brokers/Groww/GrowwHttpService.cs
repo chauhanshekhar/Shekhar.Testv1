@@ -18,24 +18,24 @@ public class GrowwHttpService : IGrowwHttpService
     private readonly AppErrorLogger _errorLogger;
     private readonly IServiceScopeFactory _scopeFactory;
 
-
-    // GLOBAL GROWW RATE LIMIT
-    private static readonly SemaphoreSlim _apiLock = new(1, 1);
-
-    private static DateTime _lastApiCall =
-        DateTime.MinValue;
+    // Per-category Groww rate limits (orders / live data / other). Replaces a static lock that sent
+    // every call one at a time, >= 2.5 s apart - 24 calls/min for the whole process. One limiter per
+    // process: this service is registered as a singleton in both the API and the Worker.
+    private readonly GrowwRateLimiter _limiter;
 
 
     public GrowwHttpService(
         HttpClient http,
         IGrowwAuthService auth,
         AppErrorLogger errorLogger,
-        IServiceScopeFactory scopeFactory)
+        IServiceScopeFactory scopeFactory,
+        GrowwRateLimiter? limiter = null)
     {
         _http = http;
         _auth = auth;
         _errorLogger = errorLogger;
         _scopeFactory = scopeFactory;
+        _limiter = limiter ?? new GrowwRateLimiter(new GrowwRateLimits());
     }
 
 
@@ -155,6 +155,18 @@ public class GrowwHttpService : IGrowwHttpService
             if (response.StatusCode ==
           HttpStatusCode.TooManyRequests)
             {
+                // Logged so a too-high Groww:RateLimits shows up in AppErrors (previously silent).
+                await LogFailureAsync(
+                    method,
+                    url,
+                    token,
+                    requestJson,
+                    responseJson,
+                    429,
+                    $"Groww rate limit (429) - {GrowwRateLimiter.Classify(url)}",
+                    signalId,
+                    orderReferenceId);
+
                 await Task.Delay(
                     TimeSpan.FromSeconds(10));
 
@@ -241,36 +253,15 @@ public class GrowwHttpService : IGrowwHttpService
         SendWithRateLimitAsync(
             HttpRequestMessage request)
     {
+        // Wait for a slot in this call's own category (orders / live data / other), then send
+        // WITHOUT holding a lock, so calls can be in flight concurrently.
+        var category = GrowwRateLimiter.Classify(
+            request.RequestUri?.OriginalString ?? "");
 
-        await _apiLock.WaitAsync();
+        await _limiter.AcquireAsync(category);
 
-
-        try
-        {
-
-   
-
-            const int GrowwDelayMs = 2500;
-
-            var diff = DateTime.UtcNow - _lastApiCall;
-
-            if (diff.TotalMilliseconds < GrowwDelayMs)
-            {
-                await Task.Delay(
-                    GrowwDelayMs - (int)diff.TotalMilliseconds);
-            }
-
-            _lastApiCall = DateTime.UtcNow;
-
-
-            return await
-                _http.SendAsync(request);
-
-        }
-        finally
-        {
-            _apiLock.Release();
-        }
+        return await
+            _http.SendAsync(request);
     }
 
 

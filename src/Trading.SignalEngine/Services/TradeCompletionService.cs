@@ -138,8 +138,14 @@ namespace Trading.SignalEngine.Services;
             RsiAtEntry =
             signal.RsiAtEntry,
 
+            Rsi5mAtEntry =
+            signal.Rsi5mAtEntry,
+
             PcrAtEntry =
             signal.PcrAtEntry,
+
+            PcrFullChainAtEntry =
+            signal.PcrFullChainAtEntry,
 
             DeltaAtEntry =
             signal.DeltaAtEntry,
@@ -271,6 +277,25 @@ namespace Trading.SignalEngine.Services;
         * lots
         * lotSize;
     }
+    /// <summary>Lots closed by a partial exit fill. FilledQty is in contracts; the result is in lots.</summary>
+    public static int PartialCloseLots(int filledQtyContracts, int orderedLots, int lotSize)
+    {
+        if (filledQtyContracts <= 0)
+            return orderedLots;
+        if (lotSize <= 1)
+            return filledQtyContracts;
+        return Math.Max(1, filledQtyContracts / lotSize);
+    }
+
+    /// <summary>
+    /// A partial fill keeps the trade running, but must never reopen a signal a full exit has
+    /// already closed: on 2026-11-02 signal 10316 was reset CLOSED -> ACTIVE this way and stuck.
+    /// </summary>
+    public static string StatusAfterPartialFill(string currentStatus)
+        => currentStatus == SignalStatus.Closed
+            ? SignalStatus.Closed
+            : SignalStatus.Active;
+
     public async Task CompletePartialExitAsync(
     Signal signal,
     Order partialExitOrder)
@@ -294,14 +319,13 @@ namespace Trading.SignalEngine.Services;
             .FirstOrDefault();
 
 
-        var closeLots =
-            partialExitOrder.FilledQty > 0
-            ? partialExitOrder.FilledQty
-            : partialExitOrder.Quantity;
-
-
         var lotSize =
             _instruments.GetLotSize(signal.Symbol);
+
+        // Order.FilledQty is what the broker reports: CONTRACTS (20 for one SENSEX lot), while
+        // Order.Quantity, Signal.Quantity and RemainingQty are LOTS. Using FilledQty as lots made a
+        // 2-lot partial close "40 lots" and zeroed RemainingQty, ending the target ladder early.
+        var closeLots = PartialCloseLots(partialExitOrder.FilledQty, partialExitOrder.Quantity, lotSize);
 
 
         var entryPrice =
@@ -344,9 +368,9 @@ namespace Trading.SignalEngine.Services;
             signal.OptionLtp;
 
 
-        // trade still running
+        // trade still running — unless a full exit already closed it (signal 10316)
         signal.Status =
-            SignalStatus.Active;
+            StatusAfterPartialFill(signal.Status);
 
 
         await _journalRepo.AddAsync(
@@ -400,8 +424,14 @@ namespace Trading.SignalEngine.Services;
                 RsiAtEntry =
                     signal.RsiAtEntry,
 
+                Rsi5mAtEntry =
+                    signal.Rsi5mAtEntry,
+
                 PcrAtEntry =
                     signal.PcrAtEntry,
+
+                PcrFullChainAtEntry =
+                    signal.PcrFullChainAtEntry,
 
                 DeltaAtEntry =
                     signal.DeltaAtEntry,

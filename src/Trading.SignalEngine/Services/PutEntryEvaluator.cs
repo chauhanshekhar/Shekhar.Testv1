@@ -57,6 +57,11 @@ public class PutEntryEvaluator
                 m.Ltp < m.Ema20));
         }
 
+        // 2b: EMA gap (shared CALL/PUT condition, off by default - see EmaGapCondition).
+        if (EmaGapCondition.Evaluate(m.Ema20, m.Ema50, Enabled, Active, Threshold) is { } emaGap)
+            conditions.Add(emaGap);
+
+
         // 3 - LTP < VWAP. Not wired for the same reason as the CALL side: no index volume means
         // no VWAP to compare against.
 
@@ -88,6 +93,20 @@ public class PutEntryEvaluator
 
                 passed |= m.Rsi >= bouncebackFloor && m.Rsi <= bouncebackCeiling;
                 description += $" or [{bouncebackFloor},{bouncebackCeiling}]";
+            }
+
+            // Optional second PUT band (EnablePutRsiBand2, off by default, per-symbol capable).
+            // Widens the accepted RSI to the union of [floor,ceiling] and [Band2Floor,Band2Ceiling]
+            // without touching the 35-39 gap between them.
+            if (Enabled("EnablePutRsiBand2", false)
+                && Active("PutRsiBand2Floor")
+                && Active("PutRsiBand2Ceiling"))
+            {
+                var band2Floor = Threshold("PutRsiBand2Floor", 40m);
+                var band2Ceiling = Threshold("PutRsiBand2Ceiling", 49m);
+
+                passed |= m.Rsi >= band2Floor && m.Rsi <= band2Ceiling;
+                description += $" or [{band2Floor},{band2Ceiling}]";
             }
 
             conditions.Add((

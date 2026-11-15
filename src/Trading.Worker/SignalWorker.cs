@@ -34,9 +34,9 @@ public class SignalWorker : BackgroundService
         new KillSwitchGate(),
         new EventBlackoutGate(),
         new StaleDataGate(),
-        new MaxDailyTradesGate(),
-        new CircuitBreakerGate(),
-        new ConsecutiveLossGate(),
+       // new MaxDailyTradesGate(),
+        //new CircuitBreakerGate(),
+       // new ConsecutiveLossGate(),
         new OnePositionGate(),
         new AtrGate(),
         new MarketRegimeGate(),
@@ -47,6 +47,17 @@ public class SignalWorker : BackgroundService
        new OiConfirmationGate(),
         new DuplicateSignalGate(),
         new RiskGate(),
+        new IndexStopFloorGate(),
+        new StaleEntryGate(),
+        new EarlyTrendGate(),
+        new ChopGate(),              // off by default (EnableChopGate), per symbol or global
+        new FastEmaGate(),           // off by default (EnableFastEmaGate)
+        new SessionTrendGate(),      // off by default (EnableSessionTrendGate)
+        new CrossIndexAgreementGate(), // off by default (EnableCrossIndexAgreementGate)
+        new VwapSideGate(),
+        new HandoffCooldownGate(),
+        new PutS1Gate(),
+        //new NoTradeWindowGate(),
         new RiskRewardGate(),
         new SpreadGate(),
     ];

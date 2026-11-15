@@ -137,7 +137,8 @@ public class ExitWorker : BackgroundService
             liveData, instruments, openSignals, _logger, ct);
 
         // Step 3: load latest ticks + option chain + latest ATR per symbol
-        var ltpBySymbol   = await ExitDataLoader.LoadLatestTicksAsync(tickRepo);
+        var ltpBySymbol   = await ExitDataLoader.LoadLatestTicksAsync(
+            tickRepo, openSignals.Select(s => s.Symbol));
         var chainBySymbol = await ExitDataLoader.LoadOptionChainSnapshotAsync(optionRepo);
         var latestAtrBySymbol = await ExitDataLoader.LoadLatestAtrBySymbolAsync(
             snapshotRepo, openSignals.Select(s => s.Symbol).Distinct().ToList());
@@ -193,6 +194,24 @@ public class ExitWorker : BackgroundService
            && leg2Ltp == 0
            && !forceExit;
 
+    /// <summary>
+    /// True while the entry BUY has not been confirmed filled (OrderPlaced). OptionSL/T1/T2 are
+    /// still anchored to the quote the signal was built on, and ActivateSignalAsync re-anchors them
+    /// to the fill by RATIO. Trailing, step-lock, breakeven or target logic run before that point
+    /// both fire against the wrong entry and corrupt the ratio (signal 10291: stop trailed 67 -> 83
+    /// on a stale 82.80 quote, then re-anchored to 109.88 on a 109.80 fill). Force exit still runs.
+    /// </summary>
+    internal static bool ShouldSkipUnfilledEntry(string status, bool forceExit)
+        => status == SignalStatus.OrderPlaced && !forceExit;
+
+    /// <summary>
+    /// True while a paper partial-exit SELL awaits its fill (PartialExitPending). Booking a full
+    /// paper exit then double-counts the partial lots, and the later partial fill reset the
+    /// signal to ACTIVE after it closed (signal 10316, 2026-11-02).
+    /// </summary>
+    internal static bool ShouldDeferPaperExit(string status)
+        => status == SignalStatus.PartialExitPending;
+
     // ── Evaluate a single signal ─────────────────────────────────────────────
     private async Task EvaluateExit(
         Signal signal,
@@ -215,6 +234,9 @@ public class ExitWorker : BackgroundService
         ExitDecisionService exitDecision,
         PositionCloseService positionClose)
     {
+        if (ShouldSkipUnfilledEntry(signal.Status, forceExit))
+            return;
+
         if (!ltpBySymbol.TryGetValue(signal.Symbol, out var underlyingLtp))
             return;
 
@@ -278,10 +300,10 @@ public class ExitWorker : BackgroundService
         // must cancel the resting SL_M before its MARKET sell, so a stop placed here moments
         // earlier is exactly what that cancel then fails on (broker rejects the cancel of an
         // order it is itself squaring off), aborting the close every cycle until 15:30.
-        var isLiveSignal = orders.CurrentMode != TradingMode.Paper;
+        var isLiveSignal = !orders.IsPaperSignal(signal);
         if (isLiveSignal && TradingConst.IsSingleLegStrategy(signal.StrategyType) && !forceExit)
         {
-            await stopLossSync.SyncAsync(signal, orders, orderRepo, signalRepo, uow);
+            await stopLossSync.SyncAsync(signal, orders, orderRepo, signalRepo, uow, optionLtp);
         }
 
         // save protection old values
@@ -319,6 +341,11 @@ public class ExitWorker : BackgroundService
         // ==================================================
         if (!isLiveSignal)
         {
+            // A partial SELL is in flight; BrokerOrderSyncWorker must settle it first, or the
+            // full exit books the same lots twice and the partial fill reopens the signal (10316).
+            if (ShouldDeferPaperExit(signal.Status))
+                return;
+
             var fakeExitOrder = new Order
             {
                 Id = 0,

@@ -43,19 +43,43 @@ public class StrategySelectorService
         // Uptrend or Downtrend, never Sideways.
         //
         // Expiry days are exempt, matching SignalWorker, which already skips MarketRegimeGate then.
+
+        // Sideways protection for Directional strategy.
+        // Confirmed breakout/breakdown gets a separate evaluation path.
+        var regime = ctx.Regime;
+
         if (!ctx.IsExpiryDay
             && decision.Strategy == SelectedStrategy.Directional
-            && ctx.Regime?.Trend == MarketTrend.Sideways)
+            && regime?.Trend == MarketTrend.Sideways)
         {
-            return new StrategyDecision
+            bool isDirectionalBreakout =
+                decision.MarketState == MarketState.Breakout ||
+                decision.MarketState == MarketState.Breakdown;
+
+            if (!isDirectionalBreakout)
             {
-                Strategy = SelectedStrategy.None,
-                Priority = 0,
-                MarketState = decision.MarketState,
-                Reason = $"{ctx.MarketStateReason} — Directional suppressed: MarketRegime is " +
-                         $"Sideways/{ctx.Regime.Volatility} (strategy-specific engines unaffected)"
-            };
+                return new StrategyDecision
+                {
+                    Strategy = SelectedStrategy.None,
+                    Priority = 0,
+                    MarketState = decision.MarketState,
+                    Reason = $"{ctx.MarketStateReason} — Directional suppressed: " +
+                             $"Sideways/{regime.Volatility}"
+                };
+            }
+
+            if (regime.Volatility == MarketVolatility.Extreme)
+            {
+                return new StrategyDecision
+                {
+                    Strategy = SelectedStrategy.None,
+                    Priority = 0,
+                    MarketState = decision.MarketState,
+                    Reason = $"{ctx.MarketStateReason} — Sideways/Extreme requires validation"
+                };
+            }
         }
+
 
         return decision;
     }

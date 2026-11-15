@@ -72,11 +72,24 @@ public class SignalResultFactory
         if (delta <= 0)
             delta = 0.45m;
 
+        // stopDistance comes back from AtrRiskService ALREADY CLAMPED to
+        // [MinimumIndexStopPoints, MaximumIndexStopPoints]. Targets must be derived from that
+        // clamped distance, not from raw ATR, or the two legs scale differently and R:R silently
+        // drifts away from the configured AtrTarget/AtrStopLoss ratio whenever the clamp binds.
+        //
+        // Previously the targets used `atrRaw * AtrTargetNMultiplier * delta` while risk used the
+        // clamped stop. Below AtrRaw 13.33 (= MinimumIndexStopPoints / AtrStopLossMultiplier) the
+        // floor widened the stop but left the targets untouched, pushing R:R under 2.0 and making
+        // RiskRewardGate unsatisfiable. That covered 99.1% of observed NIFTY snapshots.
         var stopDistance = Math.Abs(ltp - sl);
 
+        var stopMultiplier = Settings.AtrStopLossMultiplier > 0
+            ? Settings.AtrStopLossMultiplier
+            : 1.5m;
+
         var optionRisk = stopDistance * delta;
-        var optionTarget1 = atrRaw * Settings.AtrTarget1Multiplier * delta;
-        var optionTarget2 = atrRaw * Settings.AtrTarget2Multiplier * delta;
+        var optionTarget1 = stopDistance * (Settings.AtrTarget1Multiplier / stopMultiplier) * delta;
+        var optionTarget2 = stopDistance * (Settings.AtrTarget2Multiplier / stopMultiplier) * delta;
 
         optionSL = Math.Round(optionLtp - optionRisk, 2);
 
@@ -106,8 +119,11 @@ public class SignalResultFactory
                 t1,
                 t2)
 
+            // The TRADED leg's strike, not atmStrike: the liquid leg can be a neighbouring strike
+            // (round strikes carry the volume), and storing atmStrike made StrikePrice disagree
+            // with OptionSymbol/OptionLtp on 15 of 86 signals (e.g. 124: 54400 vs 54500PE).
             .ForOption(
-                atmStrike,
+                chainLeg.StrikePrice,
                 optionType,
                 optionSymbol,
                 optionLtp,

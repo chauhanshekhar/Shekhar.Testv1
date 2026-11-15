@@ -63,6 +63,10 @@ public class CallEntryEvaluator
                 m.Ltp > m.Ema20));
         }
 
+        // 2b: EMA gap (shared CALL/PUT condition, off by default - see EmaGapCondition).
+        if (EmaGapCondition.Evaluate(m.Ema20, m.Ema50, Enabled, Active, Threshold) is { } emaGap)
+            conditions.Add(emaGap);
+
         // 3 - LTP > VWAP. Not wired: Groww publishes no index candle volume, so Vwap is NULL on
         // every row (verified 2026-09-02: 328,092 of 328,092) and every Candle.Volume is 0.
         // Wiring this live would suppress every CALL forever - it needs a volume-bearing feed.
@@ -149,13 +153,24 @@ public class CallEntryEvaluator
         // 12: PCR - off by default (EnableCallPcrFilter). Historically counter-indicated on the
         // closed trades analysed (CALL winners averaged PCR 0.90, losers 1.17), so this must be
         // turned on deliberately per symbol after a fresh backtest.
-        if (Active("CallPcrMinimum"))
+        if (Enabled("EnableCallPcrFilter", false) && Active("CallPcrMinimum"))
         {
             var minimum = Threshold("CallPcrMinimum", 1.05m);
 
             conditions.Add((
                 $"12 PCR >= {minimum} - was {m.Pcr:F3}",
                 m.Pcr >= minimum));
+        }
+
+        // 12b: PCR ceiling - CALL only, applies once a CallPcrMaximum row exists and is active (no Enable flag; an
+        // unconfigured key is off). 1.5 is the compiled default if a row carries no usable value.
+        if (Active("CallPcrMaximum"))
+        {
+            var maximum = Threshold("CallPcrMaximum", 1.5m);
+
+            conditions.Add((
+                $"12b PCR <= {maximum} - was {m.Pcr:F3}",
+                m.Pcr <= maximum));
         }
 
         // 13: Open-interest change

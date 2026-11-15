@@ -1,0 +1,204 @@
+diff --git a/src/Trading.Domain/Entities/IndicatorSnapshot.cs b/src/Trading.Domain/Entities/IndicatorSnapshot.cs
+index 0f89dfe..1ceda09 100644
+--- a/src/Trading.Domain/Entities/IndicatorSnapshot.cs
++++ b/src/Trading.Domain/Entities/IndicatorSnapshot.cs
+@@ -30,6 +30,15 @@ public class IndicatorSnapshot
+     /// </summary>
+     public decimal? Rsi5m { get; set; }
+     public decimal AtrRaw { get; set; }
++
++    /// <summary>
++    /// SHADOW ONLY, never read by trading logic: would the gap-and-go momentum (S1) / gap-hold pullback (S2)
++    /// CALL strategy have fired on this minute (see TrendShadowEvaluator). Null = not evaluated.
++    /// </summary>
++    public bool? ShadowS1 { get; set; }
++    public bool? ShadowS2 { get; set; }
++    /// <summary>Opening gap % used by the shadow rules (session open vs previous close); null when unavailable.</summary>
++    public decimal? ShadowOpenGapPct { get; set; }
+     public decimal AtrPct { get; set; }
+     public decimal Pcr { get; set; }
+     public decimal? Vwap { get; set; }   // null when volume is unavailable (Groww sends none for indices)
+diff --git a/b/src/Trading.SignalEngine/Services/TrendShadowEvaluator.cs b/src/Trading.SignalEngine/Services/TrendShadowEvaluator.cs
+new file mode 100644
+index 0000000..fd7abfd
+--- /dev/null
++++ b/src/Trading.SignalEngine/Services/TrendShadowEvaluator.cs
+@@ -0,0 +1,70 @@
++using Trading.Domain.Entities;
++
++namespace Trading.SignalEngine.Services;
++
++/// <summary>
++/// SHADOW ONLY - records whether the two dedicated gap-up CALL strategies would have fired on this
++/// minute. It places no order, creates no Signal and is never read by any gate; the result is written to
++/// the per-minute IndicatorSnapshot audit row so forward evidence accumulates.
++///
++/// Rules mirror the backtest (Trading.Backtest EntryEvaluator.EvaluateTrend), thresholds fixed in advance:
++///   S1 gap-and-go momentum: gap up >= 0.30%, above session open and EMA20 > EMA50, 5m trend up, 5m RSI >= 60,
++///      bullish close above the prior 10-bar high, 09:20-14:00 IST.
++///   S2 gap-hold pullback:   gap up >= 0.30% that has not filled half, same alignment, 5m RSI >= 50,
++///      pullback within 0.5 ATR of EMA20 on a bullish bar, 10:15-14:00 IST.
++/// The ATR / index-stop-floor / regime gates are NOT applied: the flag means "the rule fired".
++/// </summary>
++public static class TrendShadowEvaluator
++{
++    private const decimal GapMinPct = 0.30m;
++    private const decimal MaxGapFill = 0.5m;
++    private const decimal PullbackAtr = 0.5m;
++    private static readonly TimeSpan IstOffset = TimeSpan.FromMinutes(330);
++
++    public readonly record struct Result(bool S1, bool S2, decimal? OpenGapPct);
++
++    /// <param name="closed1m">Closed 1m bars, ascending, spanning at least the previous session's last bar.</param>
++    /// <param name="todayUtcStart">Start of today's session in UTC (same clock as Candle.CandleTime).</param>
++    public static Result Evaluate(IReadOnlyList<Candle> closed1m, DateTime todayUtcStart,
++        decimal ema20, decimal ema50, decimal ema20_5m, decimal ema50_5m, decimal? rsi5m, decimal atrRaw)
++    {
++        var none = new Result(false, false, null);
++        var last = closed1m.Count - 1;
++        var dayStart = -1;
++        for (var i = 0; i < closed1m.Count; i++)
++            if (closed1m[i].CandleTime >= todayUtcStart) { dayStart = i; break; }
++        if (last < 11 || dayStart < 0) return none;
++
++        var bar = closed1m[last];
++        var sessionOpen = closed1m[dayStart].Open;
++        var prevClose = dayStart > 0 ? closed1m[dayStart - 1].Close : 0m;
++        decimal? gap = prevClose > 0 ? (sessionOpen - prevClose) / prevClose * 100m : null;
++        if (gap is null || gap < GapMinPct) return new Result(false, false, gap);
++
++        var ltp = bar.Close;
++        if (sessionOpen <= 0 || ltp <= sessionOpen) return new Result(false, false, gap);
++        if (!(ltp > ema20 && ema20 > ema50)) return new Result(false, false, gap);
++        if (ema20_5m > 0 && ema50_5m > 0 && ema20_5m <= ema50_5m) return new Result(false, false, gap);
++        if (rsi5m is not { } rsi) return new Result(false, false, gap);
++
++        var ist = bar.CandleTime + IstOffset + TimeSpan.FromMinutes(1);   // decision time = bar close
++        var minute = ist.Hour * 60 + ist.Minute;
++        var bullish = bar.Close > bar.Open;
++
++        var maxHigh10Prior = 0m;
++        for (var i = Math.Max(0, last - 10); i < last; i++) maxHigh10Prior = Math.Max(maxHigh10Prior, closed1m[i].High);
++        var minLow10 = decimal.MaxValue;
++        for (var i = Math.Max(0, last - 9); i <= last; i++) minLow10 = Math.Min(minLow10, closed1m[i].Low);
++        var sessionLow = decimal.MaxValue;
++        for (var i = dayStart; i <= last; i++) sessionLow = Math.Min(sessionLow, closed1m[i].Low);
++
++        var s1 = minute >= 9 * 60 + 20 && minute < 14 * 60 && rsi >= 60m && bullish && bar.Close > maxHigh10Prior;
++
++        var gapSize = sessionOpen - prevClose;
++        var s2 = minute >= 10 * 60 + 15 && minute < 14 * 60 && rsi >= 50m
++                 && sessionLow >= prevClose + (1 - MaxGapFill) * gapSize
++                 && minLow10 <= ema20 + PullbackAtr * atrRaw && bullish;
++
++        return new Result(s1, s2, gap);
++    }
++}
+diff --git a/b/src/Trading.Tests/TrendShadowEvaluatorTests.cs b/src/Trading.Tests/TrendShadowEvaluatorTests.cs
+new file mode 100644
+index 0000000..73942d9
+--- /dev/null
++++ b/src/Trading.Tests/TrendShadowEvaluatorTests.cs
+@@ -0,0 +1,68 @@
++using Trading.Domain.Entities;
++using Trading.SignalEngine.Services;
++using Xunit;
++
++namespace Trading.Tests;
++
++public class TrendShadowEvaluatorTests
++{
++    private static readonly DateTime Today = new(2026, 10, 19, 3, 45, 0, DateTimeKind.Utc);   // 09:15 IST
++
++    private static Candle Bar(DateTime t, decimal o, decimal h, decimal l, decimal c) =>
++        new() { CandleTime = t, Open = o, High = h, Low = l, Close = c };
++
++    /// <summary>Yesterday's last bar closes at 1000, today opens 1005 (+0.5% gap) and climbs 1 point per minute.</summary>
++    private static List<Candle> GapUpRising(int todayBars)
++    {
++        var bars = new List<Candle> { Bar(Today.AddMinutes(-1), 1000, 1000, 1000, 1000) };
++        for (var i = 0; i < todayBars; i++)
++        {
++            var o = 1005m + i;
++            bars.Add(Bar(Today.AddMinutes(i), o, o + 1.2m, o - 0.2m, o + 1m));
++        }
++        return bars;
++    }
++
++    [Fact]
++    public void RisingGapUpMinuteFiresMomentum()
++    {
++        var bars = GapUpRising(30);   // last bar closes 09:45 IST: inside 09:20-14:00, a new 10-bar high
++        var r = TrendShadowEvaluator.Evaluate(bars, Today, ema20: 1020, ema50: 1010, ema20_5m: 1015, ema50_5m: 1005, rsi5m: 65m, atrRaw: 2m);
++        Assert.True(r.S1);
++        Assert.False(r.S2);                   // 10:15 start not reached
++        Assert.Equal(0.5m, r.OpenGapPct);
++    }
++
++    [Fact]
++    public void NoGapNoFire()
++    {
++        var bars = GapUpRising(30);
++        bars[0] = Bar(Today.AddMinutes(-1), 1005, 1005, 1005, 1005);   // previous close == open: no gap
++        var r = TrendShadowEvaluator.Evaluate(bars, Today, 1020, 1010, 1015, 1005, 65m, 2m);
++        Assert.False(r.S1);
++        Assert.False(r.S2);
++    }
++
++    [Fact]
++    public void RsiBelowStrategyMinimumOrMissingNeverFires()
++    {
++        var bars = GapUpRising(30);
++        Assert.False(TrendShadowEvaluator.Evaluate(bars, Today, 1020, 1010, 1015, 1005, 55m, 2m).S1);
++        Assert.False(TrendShadowEvaluator.Evaluate(bars, Today, 1020, 1010, 1015, 1005, null, 2m).S1);
++    }
++
++    [Fact]
++    public void FiveMinuteDowntrendBlocks()
++    {
++        var bars = GapUpRising(30);
++        Assert.False(TrendShadowEvaluator.Evaluate(bars, Today, 1020, 1010, ema20_5m: 1000, ema50_5m: 1005, 65m, 2m).S1);
++    }
++
++    [Fact]
++    public void TooFewBarsReturnsNothingInsteadOfThrowing()
++    {
++        var r = TrendShadowEvaluator.Evaluate(GapUpRising(3), Today, 1020, 1010, 1015, 1005, 65m, 2m);
++        Assert.False(r.S1);
++        Assert.False(r.S2);
++    }
++}
+diff --git a/src/Trading.Worker/SignalWorker.cs b/src/Trading.Worker/SignalWorker.cs
+index f0ce31b..c8aade0 100644
+--- a/src/Trading.Worker/SignalWorker.cs
++++ b/src/Trading.Worker/SignalWorker.cs
+@@ -2,6 +2,7 @@ using Trading.Domain;
+ using Trading.Domain.Entities;
+ using Trading.Infrastructure;
+ using Trading.Infrastructure.Services;
++using Trading.SignalEngine.Services;
+ using Trading.Worker.SignalGates;
+ using Trading.Worker.Strategies;
+ 
+@@ -122,6 +123,21 @@ public class SignalWorker : BackgroundService
+ 
+         var audit = market.Audit ?? new IndicatorSnapshot { SnapshotTime = IstClock.Now, Symbol = symbol };
+ 
++        // Shadow evaluation of the gap-up strategies: audit columns only, no orders, no gate reads it.
++        // A failure here must never reach the trading path.
++        try
++        {
++            var shadow = TrendShadowEvaluator.Evaluate(market.Candles1m, TradingConstants.TodayUtcStart(),
++                market.Ema20, market.Ema50, market.Ema20_5m, market.Ema50_5m, market.Rsi5m, market.AtrRaw);
++            audit.ShadowS1 = shadow.S1;
++            audit.ShadowS2 = shadow.S2;
++            audit.ShadowOpenGapPct = shadow.OpenGapPct;
++        }
++        catch (Exception ex)
++        {
++            _logger.LogWarning(ex, "Shadow trend evaluation failed for {Symbol}; trading unaffected", symbol);
++        }
++
+         try
+         {
+             // Skip EMA check for expiry day (HeroZero doesn't need EMAs)

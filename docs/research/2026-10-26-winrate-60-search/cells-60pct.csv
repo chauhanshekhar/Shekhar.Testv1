@@ -1,0 +1,13 @@
+side,sym,feats,key,n,win,n1,w1,n2,w2,net,days
+CALL,SENSEX,"('open', 'str')","('GapUp', Interval(1.0, 2.0, closed='right'))",33,0.6363636363636364,14,0.6428571428571429,19,0.631578947368421,10623.599999999999,14
+CALL,SENSEX,"('open', 'rsi1', 'str')","('GapUp', Interval(55, 65, closed='right'), Interval(1.0, 2.0, closed='right'))",30,0.6333333333333333,12,0.6666666666666666,18,0.6111111111111112,9954.66,14
+PUT,BANKNIFTY,"('open', 'dchg', 'eff')","('GapUp', Interval(-99.0, -0.5, closed='right'), Interval(0.7, 1.01, closed='right'))",33,0.7272727272727273,12,0.9166666666666666,21,0.6190476190476191,36940.15,4
+PUT,BANKNIFTY,"('rsi1', 'hr')","(Interval(45, 55, closed='right'), '11')",34,0.6470588235294118,14,0.7142857142857143,20,0.6,23663.519999999997,23
+PUT,BANKNIFTY,"('rsi1', 'str', 'hr')","(Interval(45, 55, closed='right'), Interval(0.0, 0.5, closed='right'), '11')",30,0.6333333333333333,13,0.6923076923076923,17,0.5882352941176471,19668.1,22
+PUT,BANKNIFTY,"('atr', 'dchg', 'eff')","(Interval(0.03, 0.05, closed='right'), Interval(-99.0, -0.5, closed='right'), Interval(0.7, 1.01, closed='right'))",51,0.6274509803921569,40,0.625,11,0.6363636363636364,20782.130000000005,11
+PUT,BANKNIFTY,"('dchg', 'eff')","(Interval(0.0, 0.2, closed='right'), Interval(0.2, 0.35, closed='right'))",40,0.6,19,0.631578947368421,21,0.5714285714285714,19180.77,19
+PUT,SENSEX,"('str', 'hr')","(Interval(0.5, 1.0, closed='right'), '10')",41,0.6585365853658537,20,0.55,21,0.7619047619047619,25494.8,27
+PUT,SENSEX,"('rsi5', 'atr')","(Interval(25, 32, closed='right'), Interval(0.0, 0.03, closed='right'))",46,0.6521739130434783,29,0.6896551724137931,17,0.5882352941176471,16471.370000000003,16
+PUT,SENSEX,"('eff', 'hr')","(Interval(0.7, 1.01, closed='right'), '10')",60,0.6166666666666667,18,0.6666666666666666,42,0.5952380952380952,39667.65,21
+PUT,SENSEX,"('rsi1', 'pcr', 'str')","(Interval(45, 55, closed='right'), Interval(0.7, 0.9, closed='right'), Interval(0.0, 0.5, closed='right'))",30,0.6,13,0.6153846153846154,17,0.5882352941176471,11852.579999999998,14
+PUT,SENSEX,"('atr', 'dchg', 'str')","(Interval(0.0, 0.03, closed='right'), Interval(-0.5, -0.2, closed='right'), Interval(0.0, 0.5, closed='right'))",40,0.6,20,0.6,20,0.6,10031.689999999999,20

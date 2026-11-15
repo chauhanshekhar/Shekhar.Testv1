@@ -30,8 +30,10 @@ public class TradeJournal
 
     // Market context at entry
     public decimal SignalConfidence  { get; set; }
-    public decimal RsiAtEntry        { get; set; }
+    public decimal RsiAtEntry        { get; set; }   // copied from Signal.RsiAtEntry (5-minute RSI from 2026-09-30, 1-minute before)
+    public decimal? Rsi5mAtEntry     { get; set; }   // 5-minute RSI(14) — the entry-check RSI
     public decimal PcrAtEntry        { get; set; }
+    public decimal? PcrFullChainAtEntry { get; set; }  // copied from Signal.PcrFullChainAtEntry
     public decimal DeltaAtEntry      { get; set; }
     public decimal ChangeInOiAtEntry { get; set; }
 

@@ -84,7 +84,19 @@ public class SingleSignalRuleEvaluator
 
     public SingleSignalRuleEvaluator() { }
 
-    public SingleSignalRuleEvaluator(IStrategySettingsService settings) => _settings = settings;
+    private readonly EarlyCrossCallRuleEvaluator? _earlyCross;
+
+    public SingleSignalRuleEvaluator(IStrategySettingsService settings)
+    {
+        _settings = settings;
+        _earlyCross = new EarlyCrossCallRuleEvaluator(settings);
+    }
+
+    /// <summary>True when the paper-only early-cross CALL rule is switched on for the symbol (default: off).</summary>
+    public bool IsEarlyCrossEnabled(string symbol) => _earlyCross?.IsEnabled(symbol) ?? false;
+
+    public SingleSignalRuleResult EvaluateEarlyCross(string symbol, in EarlyCrossInput input) =>
+        _earlyCross?.Evaluate(symbol, input) ?? SingleSignalRuleResult.NoMatch("EarlyCross unavailable");
 
     /// <summary>
     /// True unless a StrategySettings row explicitly disables it. Null settings (the parameterless

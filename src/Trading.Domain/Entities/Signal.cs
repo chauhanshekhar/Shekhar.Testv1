@@ -66,8 +66,10 @@ public class Signal
     public string? ExitReason { get; set; }
 
     // Market context at entry — copied to TradeJournal on exit
-    public decimal RsiAtEntry        { get; set; }
+    public decimal RsiAtEntry        { get; set; }   // entry-check RSI: 5-minute RSI from 2026-09-30 (1-minute on older rows); 1m fallback when no 5m RSI exists
+    public decimal? Rsi5mAtEntry     { get; set; }   // 5-minute RSI(14) — the value the Call/PutRsiFloor..Ceiling band is checked against
     public decimal PcrAtEntry        { get; set; }
+    public decimal? PcrFullChainAtEntry { get; set; }  // full-chain PCR at entry; NULL when the PCR_FULL_CHAIN indicator was stale (>2 min) or row predates this column
     public decimal DeltaAtEntry      { get; set; }
     public decimal ChangeInOiAtEntry { get; set; }
     public decimal AtrPctAtEntry     { get; set; }

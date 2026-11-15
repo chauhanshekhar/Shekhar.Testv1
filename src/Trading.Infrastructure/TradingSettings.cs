@@ -80,12 +80,6 @@ public class TradingSettings
     // Hero Zero
     // =========================
 
-    public decimal HeroZeroMinScore { get; set; } = 90m;
-
-    public TimeSpan HeroZeroStartTime { get; set; }
-        = new(14, 0, 0);
-
-
     public decimal HeroZeroMinPremium { get; set; } = 5m;
 
 
@@ -99,11 +93,8 @@ public class TradingSettings
     };
 
 
-    public decimal HeroZeroSLPercent { get; set; } = 50;
-
-    public decimal HeroZeroT1Multiplier { get; set; } = 2;
-
-    public decimal HeroZeroT2Multiplier { get; set; } = 5;
+    // HeroZero minimum score (70), time windows and option SL/T1/T2 (50% / 2x / 4x) are fixed
+    // in HeroZeroSignalEngine and SignalBuilder.AsHeroZero(); they are not configurable.
 
 
     // =========================
@@ -182,13 +173,22 @@ public class TradingSettings
 
     public decimal AtrStopLossMultiplier { get; set; } = 1.5m;
 
-    public decimal AtrTarget1Multiplier { get; set; } = 2.0m;
+    // Ratios against the stop, not standalone numbers: T1 = (1.5 / 1.5) = 1.0x risk,
+    // T2 = (1.95 / 1.5) = 1.3x risk. Kept in step with appsettings.json so a missing key
+    // falls back to the same geometry rather than silently restoring the old 2.0x T2.
+    public decimal AtrTarget1Multiplier { get; set; } = 1.5m;
 
-    public decimal AtrTarget2Multiplier { get; set; } = 3.0m;
+    public decimal AtrTarget2Multiplier { get; set; } = 1.95m;
 
     public decimal MinimumIndexStopPoints { get; set; } = 20m;
 
     public decimal MaximumIndexStopPoints { get; set; } = 100m;
+
+    // IndexStopFloorGate blocks directional entries with AtrRaw < MinimumIndexStopPoints / this.
+    // 0 (default) = follow AtrStopLossMultiplier, the original coupling. Set separately so the stop
+    // can be tightened without also raising the floor: at a 1.25 stop the coupled floor moves from
+    // 13.33 to 16.00 ATR and blocks profitable low-ATR entries (docs/research/2026-10-07-stop-width).
+    public decimal IndexStopFloorAtrMultiplier { get; set; } = 0m;
 
     // Caps how much ExitWorker's ATR-based option trailing SL can move per evaluation,
     // as a fraction of the ATR distance itself — scales with premium/volatility instead of

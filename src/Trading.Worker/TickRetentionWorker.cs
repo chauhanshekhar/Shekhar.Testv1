@@ -13,6 +13,7 @@ namespace Trading.Worker;
 ///   - 1m Candle rows:  keep 6 months
 ///   - 5m+ Candles:     keep forever
 ///   - OptionChainData: keep 90 days (OI analysis, PCR trend, backtesting, SignalOutcome correlation)
+///   - OptionMinuteHistory: keep 90 days (per-minute premium/delta history for backtests)
 /// Uses ExecuteDeleteAsync (single SQL DELETE … WHERE — no rows loaded into memory).
 /// </summary>
 public class TickRetentionWorker : BackgroundService
@@ -56,6 +57,7 @@ public class TickRetentionWorker : BackgroundService
         var tickRepo = scope.ServiceProvider.GetRequiredService<IRepository<MarketTick>>();
         var candleRepo = scope.ServiceProvider.GetRequiredService<IRepository<Candle>>();
         var optionRepo = scope.ServiceProvider.GetRequiredService<IRepository<OptionChainData>>();
+        var optionHistoryRepo = scope.ServiceProvider.GetRequiredService<IRepository<OptionMinuteHistory>>();
 
         var tickCutoff = IstClock.Now.AddDays(-7);
         var candle1mCutoff = IstClock.Now.AddDays(-180);   // 6 months
@@ -67,6 +69,8 @@ public class TickRetentionWorker : BackgroundService
             c => c.Symbol.EndsWith("_1m") && c.CandleTime < candle1mCutoff);
 
         await optionRepo.ExecuteDeleteAsync(o => o.CreatedOn < optionCutoff);
+
+        await optionHistoryRepo.ExecuteDeleteAsync(o => o.MinuteTime < optionCutoff);
     }
 
     private static TimeSpan TimeUntilNextRun()

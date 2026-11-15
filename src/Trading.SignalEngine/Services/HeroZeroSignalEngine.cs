@@ -29,7 +29,7 @@ public class HeroZeroSignalEngine
 
     private static readonly TimeSpan NormalDayStart = new(9, 30, 0);
     private static readonly TimeSpan ExpiryGammaModeStart = new(11, 0, 0);
-    private static readonly TimeSpan ExpiryLotteryModeStart = new(14, 30, 0);
+    private static readonly TimeSpan ExpiryLotteryModeStart = new(13, 30, 0);
 
     private const decimal LotteryMinPremium = 5m;
     private const decimal LotteryMaxPremium = 20m;
@@ -97,7 +97,7 @@ public class HeroZeroSignalEngine
             }
             else if (now >= ExpiryLotteryModeStart)
             {
-                // After 14:30 — lottery mode: wider premium band, higher bar.
+                // From 13:30 — lottery mode: narrower premium band, higher bar.
                 minPremium = LotteryMinPremium;
                 maxPremium = LotteryMaxPremium;
                 minScore = LotteryMinScore;
@@ -105,7 +105,7 @@ public class HeroZeroSignalEngine
             }
             else
             {
-                // 11:00–14:30 — Gamma Mode: full chain, standard bar.
+                // 11:00–13:30 — Gamma Mode: full chain, standard bar.
                 universe = chain;
             }
         }

@@ -19,7 +19,9 @@ public static class HolidayCache
 /// <summary>
 /// Single source of truth for current Indian Standard Time (IST = UTC+5:30).
 /// Use IstClock.Now everywhere instead of DateTime.UtcNow or DateTime.Now.
-/// All datetime values stored in DB are IST.
+/// All datetime values stored in DB are IST — except Candles.CandleTime, which is UTC
+/// (GrowwHistoricalDataService stores Groww's epoch as .UtcDateTime). Compare candle times
+/// with DateTime.UtcNow (see MarketSnapshotBuilder.IsClosedNow), never with IstClock.Now.
 /// </summary>
 public static class IstClock
 {
@@ -78,7 +80,7 @@ public static class MarketHours
         return true;
 #else
         var now = IstClock.Now;
-        if (now.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday) return false;
+       if (now.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday) return false;
         if (HolidayCache.IsHolidayToday()) return false;
         var t = now.TimeOfDay;
         return t >= SignalOpen && t <= SignalClose;
