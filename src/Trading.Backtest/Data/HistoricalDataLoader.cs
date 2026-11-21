@@ -1,10 +1,8 @@
 using Microsoft.EntityFrameworkCore;
-using Trading.Backtest.Settings;
-using Trading.Backtest.Simulation;
-using Trading.Domain.Entities;
-using Trading.Infrastructure;
-using Trading.Infrastructure.Data;
 using Trading.Backtest.Reporting;
+using Trading.Backtest.Settings;
+using Trading.Domain.Entities;
+using Trading.Infrastructure.Data;
 
 namespace Trading.Backtest.Data;
 
@@ -26,15 +24,38 @@ public sealed class HistoricalDataLoader
             .Options;
     }
 
-    public async Task<List<Bar>> LoadBarsAsync(string series, DateTime fromUtc, CancellationToken ct = default)
+
+          public async Task<List<Bar>> LoadBarsAsync(
+    string series,
+    DateTime fromUtc,
+    CancellationToken ct = default)
     {
         await using var db = new TradingDbContext(_options);
+
+        var historyFromUtc = fromUtc.AddDays(-10);
+
         var rows = await db.Candles
-            .Where(c => c.Symbol == series && c.CandleTime >= fromUtc)
+            .Where(c => c.Symbol == series &&
+                        c.CandleTime >= historyFromUtc)
             .OrderBy(c => c.CandleTime)
-            .Select(c => new { c.CandleTime, c.Open, c.High, c.Low, c.Close })
+            .Select(c => new
+            {
+                c.CandleTime,
+                c.Open,
+                c.High,
+                c.Low,
+                c.Close
+            })
             .ToListAsync(ct);
-        return rows.Select(c => new Bar(c.CandleTime, (double)c.Open, (double)c.High, (double)c.Low, (double)c.Close)).ToList();
+
+        return rows.Select(c => new Bar(
+            c.CandleTime,
+            (double)c.Open,
+            (double)c.High,
+            (double)c.Low,
+            (double)c.Close
+        )).ToList();
+    
     }
 
     /// <summary>One row per symbol-minute: the latest snapshot second of that minute (PCR, MarketState, trend, selector).</summary>
@@ -49,6 +70,28 @@ public sealed class HistoricalDataLoader
                 FROM IndicatorSnapshots WITH (NOLOCK)
                 WHERE SnapshotTime >= {fromIst})
             SELECT Symbol, SnapshotTime, Pcr, MarketState, TrendDirection, StrategySelected, MarketRegime FROM x WHERE rn = 1")
+            .ToListAsync(ct);
+    }
+
+    /// <summary>Loads every minute's latest raw indicator snapshot for independent signal discovery.
+    /// No historical signal, strategy, confidence, or gate columns are selected or filtered.</summary>
+    public async Task<List<DiscoverySnapshotRow>> LoadDiscoverySnapshotsAsync(DateTime fromIst, CancellationToken ct = default)
+    {
+        await using var db = new TradingDbContext(_options);
+        return await db.Database.SqlQuery<DiscoverySnapshotRow>($@"
+            WITH x AS (
+                SELECT Symbol, SnapshotTime, Ltp, DayOpen, YesterdayClose,
+                       Ema20, Ema50, Ema20_5m, Ema50_5m, Rsi, Rsi5m,
+                       AtrRaw, AtrPct, Pcr, PcrFullChain, Vwap, PriceChangePct,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY Symbol, DATEADD(minute, DATEDIFF(minute, 0, SnapshotTime), 0)
+                           ORDER BY SnapshotTime DESC, Id DESC) AS rn
+                FROM IndicatorSnapshots WITH (NOLOCK)
+                WHERE SnapshotTime >= {fromIst})
+            SELECT Symbol, SnapshotTime, Ltp, DayOpen, YesterdayClose,
+                   Ema20, Ema50, Ema20_5m, Ema50_5m, Rsi, Rsi5m,
+                   AtrRaw, AtrPct, Pcr, PcrFullChain, Vwap, PriceChangePct
+            FROM x WHERE rn = 1 ORDER BY SnapshotTime, Symbol")
             .ToListAsync(ct);
     }
 

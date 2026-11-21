@@ -15,4 +15,8 @@
     <ProjectReference Include="..\Trading.Worker\Trading.Worker.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="QuestPDF" Version="2026.9.2" />
+  </ItemGroup>
+
 </Project>

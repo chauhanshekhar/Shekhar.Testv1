@@ -263,17 +263,17 @@ public static class MarketSnapshotBuilder
         // HistoricalDataWorker stores the future's 1m bars as {SYMBOL}_FUT_1m. When they exist they replace the
         // index-candle values above (always 0 / null). VWAP is shifted into index points (FuturesFlow). No entry
         // condition reads volume or VWAP yet - this only fills the inputs and the IndicatorSnapshots.Vwap column.
-        var symFut = GrowwFutures.CandleSymbol(ctx.Symbol);
-        var futureBars = (await ctx.CandleRepo.FindAsync(c => c.Symbol == symFut && c.CandleTime >= todayUtcStart))
-            .Where(c => IsClosedNow(c.CandleTime, 1))
-            .OrderBy(c => c.CandleTime)
-            .ToList();
-        if (FuturesFlow.From(futureBars, ltp) is { } flow)
-        {
-            vwap = flow.Vwap;
-            currentVolume = flow.CurrentVolume;
-            avgVolume20 = flow.AvgVolume20;
-        }
+        //var symFut = GrowwFutures.CandleSymbol(ctx.Symbol);
+        //var futureBars = (await ctx.CandleRepo.FindAsync(c => c.Symbol == symFut && c.CandleTime >= todayUtcStart))
+        //    .Where(c => IsClosedNow(c.CandleTime, 1))
+        //    .OrderBy(c => c.CandleTime)
+        //    .ToList();
+        //if (FuturesFlow.From(futureBars, ltp) is { } flow)
+        //{
+        //    vwap = flow.Vwap;
+        //    currentVolume = flow.CurrentVolume;
+        //    avgVolume20 = flow.AvgVolume20;
+        //}
 
         // ── Option chain ──────────────────────────────────────────────────────
         var chainCutoff = IstClock.Now.AddMinutes(-30);

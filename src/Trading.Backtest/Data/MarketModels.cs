@@ -76,7 +76,7 @@ public static class SessionClock
     public static readonly TimeSpan IstOffset = TimeSpan.FromHours(5) + TimeSpan.FromMinutes(30);
 
     /// <summary>Entry window used by the validated research scripts: 09:20 IST to 15:15 IST (exclusive), expressed in UTC.</summary>
-    public static readonly TimeSpan EntryStartUtc = new(3, 50, 0);
+    public static readonly TimeSpan EntryStartUtc = new(3, 45, 0);
     public static readonly TimeSpan EntryEndUtc = new(9, 45, 0);
 
     /// <summary>Minutes after IST midnight for a UTC instant.</summary>

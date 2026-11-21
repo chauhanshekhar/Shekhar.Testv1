@@ -136,8 +136,8 @@ public class HistoricalDataWorker : BackgroundService
             refreshMinutes: 15,
             ct);
 
-        if (_settings.Value.FetchIndexFutures && nowIst >= sessionOpen)
-            await SyncFuturesAsync(instrument, candleRepo, historicalSvc, uow, sessionOpen, nowIst, ct);
+        //if (_settings.Value.FetchIndexFutures && nowIst >= sessionOpen)
+        //    await SyncFuturesAsync(instrument, candleRepo, historicalSvc, uow, sessionOpen, nowIst, ct);
     }
 
     /// <summary>
@@ -188,18 +188,18 @@ public class HistoricalDataWorker : BackgroundService
         if (!ShouldTryFallbackContract(count, nowIst, sessionOpen, hasBarsToday))
             return;
 
-        var next = GrowwFutures.NextAfterNearMonth(instrument.Symbol, nowIst, roll);
-        try
-        {
-            var nextCount = await SyncInterval(instrument, GrowwInterval.OneMinute, candleSymbol, repo, historicalSvc, uow,
-                sessionOpen, nowIst, refreshMinutes: 5, ct, next, GrowwSegment.Fno);
-            _logger.LogWarning("HistoricalDataWorker: no candles for {Contract}; {Next} returned {Count}", contract, next, nextCount);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "HistoricalDataWorker: futures candles failed for {Contract} and {Next} - no volume/VWAP this cycle",
-                contract, next);
-        }
+        //var next = GrowwFutures.NextAfterNearMonth(instrument.Symbol, nowIst, roll);
+        //try
+        //{
+        //    var nextCount = await SyncInterval(instrument, GrowwInterval.OneMinute, candleSymbol, repo, historicalSvc, uow,
+        //        sessionOpen, nowIst, refreshMinutes: 5, ct, next, GrowwSegment.Fno);
+        //    _logger.LogWarning("HistoricalDataWorker: no candles for {Contract}; {Next} returned {Count}", contract, next, nextCount);
+        //}
+        //catch (Exception ex)
+        //{
+        //    _logger.LogWarning(ex, "HistoricalDataWorker: futures candles failed for {Contract} and {Next} - no volume/VWAP this cycle",
+        //        contract, next);
+        //}
     }
 
     /// <summary>Fetches and upserts one candle series. Returns how many candles Groww returned.</summary>

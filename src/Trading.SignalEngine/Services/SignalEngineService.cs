@@ -548,9 +548,11 @@ public class SignalEngineService
         // 4: Previous five-minute high
         if (Enabled("EnableCallPrev5mHighFilter"))
         {
+            const decimal buffer = 5m; // Compare 5 vs 10 in replay
+
             conditions.Add((
-                $"4 LTP > Prev5mHigh ({(m.Prev5mHigh > 0 ? m.Prev5mHigh.ToString("F2") : "unavailable")})",
-                m.Prev5mHigh > 0 && m.Ltp > m.Prev5mHigh));
+                $"4 LTP > Prev5mHigh + {buffer} ({(m.Prev5mHigh > 0 ? m.Prev5mHigh.ToString("F2") : "unavailable")})",
+                m.Prev5mHigh > 0 && m.Ltp > m.Prev5mHigh + buffer));
         }
 
         // 5: RSI

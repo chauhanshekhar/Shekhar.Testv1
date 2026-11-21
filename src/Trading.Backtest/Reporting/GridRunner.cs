@@ -68,7 +68,22 @@ public sealed class GridRunner
             foreach (var symbol in data.Select(d => d.Symbol).Append("ALL"))
             {
                 var subset = symbol == "ALL" ? data : data.Where(d => d.Symbol == symbol).ToList();
+                Console.WriteLine(
+    $"SIM INPUT {symbol}: " +
+    $"Symbols={subset.Count}, " +
+    $"Points={subset.Sum(d => d.Points.Length)}, " +
+    $"First={subset.SelectMany(d => d.Points).Min(p => p.TimeIst):yyyy-MM-dd HH:mm:ss}, " +
+    $"Last={subset.SelectMany(d => d.Points).Max(p => p.TimeIst):yyyy-MM-dd HH:mm:ss}");
                 var result = sim.Run(subset, simOptions);
+                var nov19 = result.Evaluations
+    .Where(e => e.TimeIst.Date == new DateTime(2026, 11, 19))
+    .OrderBy(e => e.TimeIst)
+    .ToList();
+
+                Console.WriteLine(
+                    $"NOV19 {symbol}: Count={nov19.Count}, " +
+                    $"First={nov19.FirstOrDefault()?.TimeIst:yyyy-MM-dd HH:mm:ss}, " +
+                    $"Last={nov19.LastOrDefault()?.TimeIst:yyyy-MM-dd HH:mm:ss}");
                 opt.OnResult?.Invoke(config, symbol, result);
                 rows.Add(ToRow(config, symbol, result, split, subset));
             }
