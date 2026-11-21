@@ -27,6 +27,9 @@ appsettings.json
 appsettings.Production.json
 !appsettings.json.example
 !appsettings.Production.json.example
+# Large backtest artifacts
+src/Trading.Backtest.zip
+src/Trading.Backtest/docs/research/2026-11-19-reconciliation/backtest-evaluations.csv
 
 # deploy.cmd previously had a real DB password hardcoded — ignored entirely now.
 # See deploy.cmd.example for the safe, env-var-driven template.

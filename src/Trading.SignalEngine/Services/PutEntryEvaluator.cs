@@ -68,11 +68,17 @@ public class PutEntryEvaluator
         // 4: Previous five-minute low
         if (Enabled("EnablePutPrev5mLowFilter"))
         {
-            conditions.Add((
-                $"4 LTP < Prev5mLow ({(m.Prev5mLow > 0 ? m.Prev5mLow.ToString("F2") : "unavailable")})",
-                m.Prev5mLow > 0 && m.Ltp < m.Prev5mLow));
+                    const decimal buffer = 5m;
+            conditions.Add(($"4 LTP < Prev5mLow - {buffer} ({(m.Prev5mLow > 0 ? m.Prev5mLow.ToString("F2") : "unavailable")})",m.Prev5mLow > 0 && m.Ltp < m.Prev5mLow - buffer));
         }
-
+        if (Enabled("EnablePutFreshDayLowFilter"))
+        {
+            conditions.Add((
+                "PUT: Fresh breakdown below today's previous low",
+                m.DayLow > 0 &&
+                m.Ltp < m.DayLow - 5m
+            ));
+        }
         // 5: RSI
         if (Enabled("EnableRsiFilter")
             && Active("PutRsiFloor")

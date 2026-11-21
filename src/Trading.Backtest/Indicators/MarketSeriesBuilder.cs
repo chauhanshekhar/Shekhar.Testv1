@@ -54,7 +54,7 @@ public static class MarketSeriesBuilder
     {
         // number of 1m bars already closed at nowUtc (open <= now - 1 minute)
         var j = UpperBound(t1, nowUtc - TimeSpan.FromMinutes(1));
-        if (j < 50 || j <= dayStart)
+        if (j <= dayStart || j < 14)
             return null;
 
         var winStart = Math.Max(0, j - Window1m);
@@ -84,6 +84,10 @@ public static class MarketSeriesBuilder
 
         // 5m bars closed at nowUtc: open <= now - 5 minutes
         var k = UpperBound(t5, nowUtc - TimeSpan.FromMinutes(5));
+        Console.WriteLine(
+    $"RSI5 DEBUG | {symbol} | {nowUtc:yyyy-MM-dd HH:mm} UTC | " +
+    $"k={k} | First5m={t5.FirstOrDefault():yyyy-MM-dd HH:mm} | " +
+    $"LastClosed5m={(k > 0 ? t5[k - 1].ToString("yyyy-MM-dd HH:mm") : "NONE")}");
         double? rsi5 = null;
         double e20_5 = 0, e50_5 = 0;
         double atr5 = 0;
@@ -95,6 +99,9 @@ public static class MarketSeriesBuilder
             e50_5 = IndicatorMath.Ema(w5, 50);
             atr5 = IndicatorMath.Atr(b5.AsSpan(Math.Max(0, k - Window5m), k - Math.Max(0, k - Window5m)));
         }
+        Console.WriteLine(
+    $"RSI5 RESULT | {symbol} | {nowUtc:yyyy-MM-dd HH:mm} UTC | " +
+    $"Rsi5m={rsi5?.ToString("F2") ?? "NULL"}");
 
         return new MarketPoint
         {

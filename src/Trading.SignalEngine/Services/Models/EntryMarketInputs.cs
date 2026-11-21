@@ -12,6 +12,7 @@ public readonly record struct EntryMarketInputs(
     decimal Ema20,
     decimal Ema50,
     decimal Rsi,
+        decimal Rsi5m,
     decimal Pcr,
     decimal AtrPct,
     decimal PriceChangePct,

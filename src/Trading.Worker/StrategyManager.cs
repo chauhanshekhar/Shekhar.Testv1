@@ -47,6 +47,7 @@ public class StrategyManager
     private readonly FiveMinuteConfirmationService _fiveMinuteConfirmation;
     private readonly IRepository<StrategyExecutionLog> _executionLogRepo;
     private readonly IUnitOfWork _uow;
+    private readonly BreakoutProtectionService _breakoutProtectionService;
     private readonly ILogger<StrategyManager> _logger;
 
     public StrategyManager(
@@ -59,6 +60,7 @@ public class StrategyManager
         FiveMinuteConfirmationService fiveMinuteConfirmation,
         IRepository<StrategyExecutionLog> executionLogRepo,
         IUnitOfWork uow,
+        BreakoutProtectionService breakoutProtectionService,
         ILogger<StrategyManager> logger)
     {
         _heroScorer = heroScorer;
@@ -70,6 +72,7 @@ public class StrategyManager
         _fiveMinuteConfirmation = fiveMinuteConfirmation;
         _executionLogRepo = executionLogRepo;
         _uow = uow;
+        _breakoutProtectionService = breakoutProtectionService;
         _logger = logger;
     }
 
@@ -78,6 +81,9 @@ public class StrategyManager
 
     public async Task<SignalSelectionResult> SelectSignalAsync(SignalContext ctx, MarketSnapshot market, string symbol)
     {
+        _breakoutProtectionService.Update(
+   symbol,
+   market.Candles1m);
         var strategyContext = await BuildStrategyContextAsync(ctx, market, symbol);
         var decision = await _selector.Select(strategyContext);
 
@@ -205,7 +211,38 @@ public class StrategyManager
                     $"Confidence {signal.Confidence:F0} below minimum {minConfidence:F0}", blockedBy);
             }
         }
+        // After approved-rule fallback has finished.
+        // At this point, signal may come from Directional, HeroZero, EarlyCross or an approved rule.
 
+        // Breakout protection — applies to all signal-generation paths.
+        if (signal != null)
+        {
+            var isCall = signal.SignalType == TradingConst.SignalType.CALL;
+
+            var breakoutDecision = _breakoutProtectionService.Evaluate(
+                symbol,
+                isCall,
+                market.Candles1m);
+
+            if (!breakoutDecision.Allowed)
+            {
+                return new SignalSelectionResult(
+                    null,
+                    decision.MarketState,
+                    decision.Strategy,
+                    signal.Confidence,
+                    breakoutDecision.Reason,
+                    "BreakoutProtection",
+                    ruleId);
+            }
+        }
+       
+
+        // Existing five-minute confirmation continues unchanged.
+        if (fiveMinuteEnabled)
+        {
+            // Existing code...
+        }
         if (fiveMinuteEnabled)
         {
             var isCall = signal.SignalType == TradingConst.SignalType.CALL;

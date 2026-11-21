@@ -150,11 +150,19 @@ public class StrategySelectorService
 
         switch (ctx.MarketState)
         {
+            // StrongTrend disabled
             case MarketState.StrongTrend:
+                return new StrategyDecision
+                {
+                    Strategy = SelectedStrategy.None,
+                    Priority = 0,
+                    MarketState = ctx.MarketState,
+                    Reason = "StrongTrend disabled"
+                };
+
             case MarketState.Trend:
                 return await SelectTrendStrategy(ctx);
 
-            // No dedicated Scalping engine yet — Directional is the closest existing fit.
             case MarketState.Breakout:
             case MarketState.Breakdown:
             case MarketState.Scalping:
@@ -163,11 +171,9 @@ public class StrategySelectorService
                     Strategy = SelectedStrategy.Directional,
                     Priority = 4,
                     MarketState = ctx.MarketState,
-                    Reason = $"{ctx.MarketStateReason} — running Directional engine (no dedicated Scalping engine yet)"
+                    Reason = $"{ctx.MarketStateReason} — running Directional engine"
                 };
 
-            // Reversal is higher-risk on an unvalidated classifier — suppressed until a
-            // dedicated reversal strategy exists.
             case MarketState.Reversal:
             case MarketState.Range:
             case MarketState.NoTrade:
@@ -181,7 +187,6 @@ public class StrategySelectorService
                 };
         }
     }
-
     // Directional-vs-HeroZero, decided by historical win rate once both sides have enough trades
     // in this exact (MarketState, Expiry, Hour) bucket; otherwise the fixed default (Directional).
     private async Task<StrategyDecision> SelectTrendStrategy(StrategyContext ctx)

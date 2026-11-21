@@ -149,6 +149,16 @@ public class CallEntryEvaluator
                         && m.DayOpen > 0
                         && m.Ltp > m.DayOpen)));
         }
+        // CALL: Allow entry only after a fresh session-high breakout.
+        if (Enabled("EnableCallFreshDayHighFilter"))
+        {
+            conditions.Add((
+                "CALL: Fresh session high breakout required",
+                m.DayHigh > 0 &&
+                m.Ltp > m.DayHigh + 5m
+            ));
+        }
+
 
         // 12: PCR - off by default (EnableCallPcrFilter). Historically counter-indicated on the
         // closed trades analysed (CALL winners averaged PCR 0.90, losers 1.17), so this must be
