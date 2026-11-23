@@ -9,6 +9,8 @@ namespace Trading.Tests.Backtest;
 /// The replay builds decision minutes only inside the live signal window: SignalWorker generates signals only while
 /// MarketHours.IsSignalWindow() is true (SignalOpen 09:25 IST to SignalClose 15:10 IST, both inclusive), so a backtest that
 /// evaluates 09:15-09:24 or 15:11-15:14 can produce signals production never could.
+/// The first decision is 09:30, not 09:25: ATR(14) needs 15 bars, and live MarketSnapshot falls back to the last 14 bars while
+/// today has fewer than 14, so live ATR is 0 (no tradable signal) until today's 15th bar has closed. The replay copies that.
 /// </summary>
 public class BacktestSignalWindowTests
 {
@@ -48,7 +50,9 @@ public class BacktestSignalWindowTests
             .ToList();
 
         Assert.NotEmpty(today);
-        Assert.Equal(MarketHours.SignalOpen, today[0].TimeIst.TimeOfDay);
+        var firstWithAtr = MarketHours.SessionOpen + TimeSpan.FromMinutes(15);   // 15 closed bars of today: 09:30 IST
+        var expectedFirst = firstWithAtr > MarketHours.SignalOpen ? firstWithAtr : MarketHours.SignalOpen;
+        Assert.Equal(expectedFirst, today[0].TimeIst.TimeOfDay);
         Assert.Equal(MarketHours.SignalClose, today[^1].TimeIst.TimeOfDay);
     }
 

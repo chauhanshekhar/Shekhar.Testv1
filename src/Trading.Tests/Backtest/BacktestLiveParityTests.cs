@@ -134,7 +134,10 @@ public class BacktestLiveParityTests
         Assert.Equal(23900m, m.DayLow);
         Assert.Equal(24150m, m.DayHigh);
         Assert.Equal(23800m, m.YesterdayClose);
-        Assert.Equal((decimal)((24100 - 23800) / 23800.0 * 100.0), m.DayChangePct);
+        // Converted at run time, as the code does: a cast inside a constant expression is folded by the compiler with more
+        // digits (1.26050420168067223...) than the runtime double -> decimal conversion gives (1.26050420168067).
+        double expectedDayChangePct = (24100 - 23800) / 23800.0 * 100.0;
+        Assert.Equal((decimal)expectedDayChangePct, m.DayChangePct);
         Assert.Equal(0.46m, m.PriceChangePct);   // production keeps the window-open PriceChangePct
     }
 

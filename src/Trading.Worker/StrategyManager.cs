@@ -214,8 +214,9 @@ public class StrategyManager
         // After approved-rule fallback has finished.
         // At this point, signal may come from Directional, HeroZero, EarlyCross or an approved rule.
 
-        // Breakout protection — applies to all signal-generation paths.
-        if (signal != null)
+        // Breakout protection — applies to all signal-generation paths when StrategySettings.EnableBreakoutProtection is on
+        // (default off: no row = not applied, the same as before the service was registered).
+        if (signal != null && ctx.StrategySettings.GetBool(BreakoutProtectionService.EnableKey, symbol, false))
         {
             var isCall = signal.SignalType == TradingConst.SignalType.CALL;
 

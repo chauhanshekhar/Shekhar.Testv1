@@ -10,6 +10,12 @@ namespace Trading.Worker.SignalGates
 {
     public sealed class BreakoutProtectionService
     {
+        /// <summary>
+        /// StrategySettings flag (per symbol, then global). The check runs only when this row is on; with no row it is OFF,
+        /// so it is switched on and off from the database like every other filter. The backtest reads the same key.
+        /// </summary>
+        internal const string EnableKey = "EnableBreakoutProtection";
+
         // All values are in index/futures points, not option premium.
         private const decimal BreakoutBuffer = 5m;
         private const decimal PullbackBuffer = 5m;
@@ -84,6 +90,30 @@ namespace Trading.Worker.SignalGates
             {
                 return state.LastDecision;
             }
+        }
+
+        /// <summary>
+        /// Backtest replay only (Trading.Backtest). Runs the SAME state machine and buffers as <see cref="Evaluate"/> over one
+        /// session's closed 1m candles, in time order, on a fresh state that is not stored in the live per-symbol cache.
+        /// result[i] is the decision the live service holds after candles[0..i] have been processed. Not called by the
+        /// live pipeline; it changes no live behaviour.
+        /// </summary>
+        internal static BreakoutDecision[] ReplaySession(IReadOnlyList<Candle> sessionCandles, bool isCall)
+        {
+            var state = new SymbolState();
+            state.Reset(default);
+
+            var result = new BreakoutDecision[sessionCandles.Count];
+            var one = new Candle[1];
+
+            for (var i = 0; i < sessionCandles.Count; i++)
+            {
+                one[0] = sessionCandles[i];
+                ProcessCandles(state, one, isCall, default);
+                result[i] = state.LastDecision;
+            }
+
+            return result;
         }
 
         private SymbolState GetState(
