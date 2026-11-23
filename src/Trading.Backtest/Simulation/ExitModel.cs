@@ -16,7 +16,9 @@ public enum StopModel
 public sealed record SymbolExitSettings(
     bool Ladder, bool ArmOn, bool PartialSaleAtArm, bool StepLock,
     double Buffer, double MidR, double FinalR,
-    double Delta, double EntryPremium, int LotSize, bool T2Partial = false);
+    double Delta, double EntryPremium, int LotSize, bool T2Partial = false,
+    /// <summary>Lots traded for this symbol (live: StrategySettings AdaptiveLotMin per symbol); null = ExitModel.Lots.</summary>
+    int? Lots = null);
 
 /// <summary>
 /// Everything the exit replay needs. Stop geometry follows AtrRiskService: 1R in index points =
@@ -42,10 +44,13 @@ public sealed record ExitModel(
         var per = new Dictionary<string, SymbolExitSettings>(StringComparer.OrdinalIgnoreCase);
         foreach (var sym in SymbolNames)
         {
+            // Same read as AdaptiveLotSizingService: StrategySettings AdaptiveLotMin (per symbol, e.g. BANKNIFTY = 2)
+            // overrides appsettings. The half-sale at arm, the T1 partial and the T2 partial all depend on it.
+            var symLots = Math.Max(1, s.GetInt(Trading.Worker.AdaptiveLotSizingService.AdaptiveLotMinKey, sym, t.AdaptiveLotMin));
             per[sym] = new SymbolExitSettings(
                 Ladder: s.GetBool("EnableTargetLadder", sym, false),
                 ArmOn: s.GetBool("EnableBreakevenArm", sym, true),
-                PartialSaleAtArm: s.GetBool("EnableBreakevenPartialSale", sym, true) && lots > 1,
+                PartialSaleAtArm: s.GetBool("EnableBreakevenPartialSale", sym, true) && symLots > 1,
                 StepLock: s.GetBool("EnableStepLock", sym, false),
                 Buffer: (double)s.GetDecimal("BreakevenBufferPoints", sym, 15m),
                 MidR: (double)s.GetDecimal("TargetLadderMidR", sym, 3m),
@@ -54,7 +59,8 @@ public sealed record ExitModel(
                 EntryPremium: avgPremium.TryGetValue(sym, out var p) && p > 0 ? p : 100.0,
                 LotSize: lotSizes.TryGetValue(sym, out var l) && l > 0 ? l : 1,
                 // Live ignores EnableT2Partial while the ladder is on, and only acts on 3+ lots.
-                T2Partial: s.GetBool("EnableT2Partial", sym, false) && lots > 2);
+                T2Partial: s.GetBool("EnableT2Partial", sym, false) && symLots > 2,
+                Lots: symLots);
         }
 
         return new ExitModel(
