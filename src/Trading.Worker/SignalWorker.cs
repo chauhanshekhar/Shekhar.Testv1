@@ -42,7 +42,7 @@ public class SignalWorker : BackgroundService
         new MarketRegimeGate(),
     ];
 
-    private static readonly IPostSignalGate[] PostGates =
+    internal static readonly IPostSignalGate[] PostGates =
     [
     new WhipsawShadowGate(),       // First: diagnostic only, never blocks
     new OiConfirmationGate(),
@@ -51,6 +51,7 @@ public class SignalWorker : BackgroundService
     new IndexStopFloorGate(),
     new StaleEntryGate(),
     new EarlyTrendGate(),
+    new NoTradeWindowGate(),       // EnableNoTradeWindowGate; same position as the backtest (after EarlyTrendGate)
     new ChopGate(),
     new FastEmaGate(),
     new SessionTrendGate(),

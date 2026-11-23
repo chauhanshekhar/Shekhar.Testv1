@@ -231,6 +231,15 @@ namespace Trading.Worker.SignalGates
 
                 case BreakoutPhase.PullbackTracking:
 
+                    if (candle.Close > previousDayHigh + BreakoutBuffer)
+                    {
+                        state.BreakoutLevel = previousDayHigh;
+                        state.PullbackLow = candle.Low;
+                        state.PullbackHigh = 0m;
+                        return BreakoutDecision.Block(
+                            $"CALL new breakout above day high {previousDayHigh:F2}; level moved, waiting for pullback");
+                    }
+
                     if (candle.Close <
                         state.BreakoutLevel - PullbackBuffer)
                     {
@@ -343,6 +352,15 @@ namespace Trading.Worker.SignalGates
                         $"Candle day low={previousDayLow:F2}");
 
                 case BreakoutPhase.PullbackTracking:
+
+                    if (candle.Close < previousDayLow - BreakoutBuffer)
+                    {
+                        state.BreakoutLevel = previousDayLow;
+                        state.PullbackHigh = candle.High;
+                        state.PullbackLow = 0m;
+                        return BreakoutDecision.Block(
+                            $"PUT new breakdown below day low {previousDayLow:F2}; level moved, waiting for pullback");
+                    }
 
                     if (candle.Close >
                         state.BreakoutLevel + PullbackBuffer)

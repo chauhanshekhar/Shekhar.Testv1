@@ -15,7 +15,7 @@ namespace Trading.Worker.SignalGates;
 ///   NoTradeWindowSide          0 = CALL and PUT, 1 = CALL only, 2 = PUT only   (default 0)
 /// An end at or before the start disables the window rather than wrapping past midnight.
 /// </summary>
-public class NoTradeWindowGate 
+public class NoTradeWindowGate : IPostSignalGate
 {
     internal const string EnableKey = "EnableNoTradeWindowGate";
     internal const string StartKey = "NoTradeWindowStartMinute";
