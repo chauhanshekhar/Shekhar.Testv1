@@ -28,7 +28,7 @@ public static class ExitReplay
         bool isCall = true)
     {
         var live = stopModel == StopModel.Live;
-        var lots = model.Lots;
+        var lots = cfg.Lots ?? model.Lots;
         var entry = cfg.EntryPremium;
         var t1 = r * model.T1Mult / model.StopMult;
         var t2 = r * model.T2Mult / model.StopMult;

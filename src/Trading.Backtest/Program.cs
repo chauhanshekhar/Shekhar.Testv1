@@ -1,6 +1,7 @@
 
 using Microsoft.Extensions.Configuration;
 using System.Diagnostics;
+using System.Globalization;
 using System.Net.Sockets;
 using Trading.Backtest.Configurations;
 using Trading.Backtest.Data;
@@ -8,7 +9,9 @@ using Trading.Backtest.Discovery;
 using Trading.Backtest.Entry;
 using Trading.Backtest.Indicators;
 using Trading.Backtest.Reporting;
+using Trading.Backtest.Settings;
 using Trading.Backtest.Simulation;
+using Trading.Domain.Entities;
 using Trading.Infrastructure;
 
 namespace Trading.Backtest;
@@ -79,6 +82,16 @@ internal static class Program
             System.Globalization.DateTimeStyles.AssumeUniversal |
             System.Globalization.DateTimeStyles.AdjustToUniversal);
 
+        // --backtest-trades without --from: the whole history, from the first stored 1m candle of any index.
+        if (o.Has("backtest-trades") && !o.Has("from"))
+        {
+            var first = await new HistoricalDataLoader(connection)
+                .LoadFirstCandleDateAsync(ExitModel.SymbolNames.Select(index => $"{index}_1m").ToList());
+            if (first is { } firstUtc)
+                from = DateTime.SpecifyKind(firstUtc.Date, DateTimeKind.Utc);
+            Console.WriteLine($"Backtest over ALL history: from {from:yyyy-MM-dd} (first stored candle) to the last stored candle.");
+        }
+
         var outDir = o.Get(
             "out",
             Path.Combine("docs", "research", $"{DateTime.Now:yyyy-MM-dd}-backtest-grid"));
@@ -102,7 +115,7 @@ internal static class Program
 
             foreach (var symbol in ExitModel.SymbolNames)
             {
-                var bars = await loader.LoadBarsAsync($"{symbol}_FUT_1m", from);
+                var bars = await loader.LoadBarsAsync($"{symbol}_1m", from);
 
                 if (bars.Count > 0)
                     barsBySymbol[symbol] = bars.OrderBy(b => b.OpenUtc).ToArray();
@@ -142,9 +155,50 @@ internal static class Program
         }
 
         var live = await loader.LoadSettingsAsync();
+
+        // Settings as they were on the replayed days: --set "CallRsiCeiling=85,PutRsiFloor=28@SENSEX" (KEY=VALUE[@SYMBOL]).
+        // StrategySettings keeps only the current value, so a day replayed after a change needs its old value supplied here.
+        List<(string Key, string? Symbol, decimal Value)> overrides = o.Has("set") ? ParseOverrides(o.Get("set", "")) : [];
+        foreach (var (key, symbol, value) in overrides)
+        {
+            live.Set(key, symbol, value);
+            Console.WriteLine($"Setting override: {key}{(symbol is null ? "" : "@" + symbol)} = {value}");
+        }
+
+        // BreakoutProtection follows StrategySettings.EnableBreakoutProtection exactly like live (no row = off).
+        // --breakout off forces it off for a research run whatever the database says.
+        var skipBreakout = o.Get("breakout", "db").Equals("off", StringComparison.OrdinalIgnoreCase);
+        Console.WriteLine(skipBreakout
+            ? "BreakoutProtection: forced OFF by --breakout off"
+            : $"BreakoutProtection: from StrategySettings.EnableBreakoutProtection " +
+              $"(NIFTY={live.GetBool("EnableBreakoutProtection", "NIFTY", false)}, " +
+              $"BANKNIFTY={live.GetBool("EnableBreakoutProtection", "BANKNIFTY", false)}, " +
+              $"SENSEX={live.GetBool("EnableBreakoutProtection", "SENSEX", false)})");
         var instruments = await loader.LoadInstrumentsAsync();
         var exitInputs = await loader.LoadExitInputsAsync(instruments);
+
+        // P&L is points x lot size: show what each index is priced with, and refuse to price an index with no lot size.
+        foreach (var sym in ExitModel.SymbolNames)
+        {
+            var active = instruments.Any(i => string.Equals(i.Symbol, sym, StringComparison.OrdinalIgnoreCase));
+            if (exitInputs.LotSizes.TryGetValue(sym, out var lot) && lot > 0)
+                Console.WriteLine($"{sym}: lot size {lot}{(active ? "" : " (instrument is INACTIVE in TradingInstruments today)")}");
+            else
+                Console.WriteLine($"PARITY WARNING: {sym}: no LotSize in TradingInstruments - its P&L would be per 1 unit. Fix the TradingInstruments row.");
+        }
         var trading = LoadTradingSettings();
+
+        // Live trading mode decides the entry trigger candle (Paper: last closed 5m bar, Live: last closed 1m bar,
+        // UseOneMinuteEntryCandle overrides). --trading-mode wins over the database row.
+        TradingMode? tradingMode = o.Has("trading-mode")
+            ? Enum.Parse<TradingMode>(o.Get("trading-mode", "Paper"), ignoreCase: true)
+            : await loader.LoadTradingModeAsync();
+        Console.WriteLine(
+            $"Trading mode replayed for the trigger candle: {tradingMode?.ToString() ?? "unknown (1m bar)"}" +
+            (o.Has("trading-mode") ? " (from --trading-mode)" : " (from SystemSettings.TradingMode)"));
+
+        foreach (var warning in ParityWarnings(live, o.Has("regime-replay") || o.Has("signal-parity") || o.Has("backtest-trades")))
+            Console.WriteLine($"PARITY WARNING: {warning}");
 
         Console.WriteLine(
             "Loading candles, snapshots and option history (read-only)...");
@@ -156,13 +210,20 @@ internal static class Program
             ? new OptionHistoryIndex(optionRows)
             : null;
 
+        // Real entry quotes (Signals / IndicatorSnapshots) for the days OptionMinuteHistory does not cover.
+        var quoteRows = await loader.LoadEntryQuotesAsync(from + SessionClock.IstOffset);
+        var quotes = quoteRows.Count > 0 ? new EntryQuoteIndex(quoteRows) : null;
+        Console.WriteLine(
+            $"Entry quotes from DB (for days without option minute history): {quoteRows.Count(q => q.Origin == "Signals")} from Signals, " +
+            $"{quoteRows.Count(q => q.Origin == "IndicatorSnapshots")} from IndicatorSnapshots");
+
         var data = new List<SymbolData>();
         var bars5BySymbol = new Dictionary<string, Bar[]>();
 
         foreach (var symbol in ExitModel.SymbolNames)
         {
-            var b1 = await loader.LoadBarsAsync($"{symbol}_FUT_1m", from);
-            var b5 = await loader.LoadBarsAsync($"{symbol}_FUT_5m", from);
+            var b1 = await loader.LoadBarsAsync($"{symbol}_1m", from);
+            var b5 = await loader.LoadBarsAsync($"{symbol}_5m", from);
             Console.WriteLine(
     $"1m: Count={b1.Count}, First={b1.FirstOrDefault().OpenUtc:O}, Last={b1.LastOrDefault().OpenUtc:O}");
 
@@ -187,7 +248,7 @@ internal static class Program
                 snapshots.Where(s => s.Symbol == symbol).ToList(),
                 TimeSpan.FromMinutes(3));
 
-            if (o.Has("regime-replay"))
+            if (o.Has("regime-replay") || o.Has("signal-parity") || o.Has("backtest-trades"))
             {
                 points = RegimeEnricher.Attach(
                     symbol,
@@ -283,6 +344,92 @@ internal static class Program
                     $"  {d.Symbol,-10} MarketState rebuilt = stored on {100.0 * stateMatch / withBoth.Count:F1}%   MarketRegime rebuilt = stored on {100.0 * regimeMatch / withBoth.Count:F1}%   (n={withBoth.Count})");
             }
 
+            return 0;
+        }
+
+        // --backtest-trades: ONLY the replay's own trades (backtest-trades.xlsx/.csv), simulated like live, no comparison files.
+        if (o.Has("backtest-trades"))
+        {
+            var fromIst = from + SessionClock.IstOffset;
+            var evaluator = new EntryEvaluator(live, trading, instruments, SelectorMode.Replay,
+                new EntryRules { SkipBreakoutProtection = skipBreakout }, tradingMode);
+            var exit = ExitModel.From(live, trading, exitInputs.AvgDelta, exitInputs.AvgPremium, exitInputs.LotSizes);
+            var simulator = new ExecutionSimulator(evaluator, live, exit, options, quotes);
+            foreach (var sym in ExitModel.SymbolNames)
+            {
+                var ec = exit.Symbols[sym];
+                Console.WriteLine(
+                    $"{sym}: lots {ec.Lots ?? exit.Lots}, lot size {ec.LotSize}, breakeven arm {ec.ArmOn} (buffer {ec.Buffer}), " +
+                    $"half-sale at arm {ec.PartialSaleAtArm}, ladder {ec.Ladder}, step-lock {ec.StepLock}, T2 partial {ec.T2Partial}");
+            }
+
+            // One open position across every symbol and both sides (OnePositionGate), same-side cooldown after a stop,
+            // live stop ladder, real option prices where stored. Warm-up days before --from are not traded.
+            var run = simulator.Run(
+                SignalParityReport.From(data, fromIst),
+                new SimulationOptions(TradeSide.Call, StopModel.Live, PremiumMode.OptionHistoryWhereAvailable, null, BothSides: true,
+                    DayRisk: DayRiskLimits.From(trading, tradingMode)));
+            SignalParityReport.WriteBacktestTrades(outDir, run.Trades, []);
+
+            Console.WriteLine(
+                $"Backtest {fromIst:yyyy-MM-dd} onward, current settings" +
+                (overrides.Count == 0 ? "" : " + overrides") + $", BreakoutProtection {(skipBreakout ? "forced OFF" : "from StrategySettings")}: " +
+                $"{run.Trades.Count} trades ({run.Trades.Count(t => t.PnlRs > 0)} win / {run.Trades.Count(t => t.PnlRs <= 0)} loss), " +
+                $"gross P&L {run.Trades.Sum(t => t.PnlRs):+0.00;-0.00;0.00} Rs");
+            Console.WriteLine($"Wrote {Path.Combine(outDir, "backtest-trades.xlsx")} and backtest-trades.csv");
+            return 0;
+        }
+
+        // Signal parity: does the replay reproduce the real Signals rows? (read-only)
+        if (o.Has("signal-parity"))
+        {
+            var fromIst = from + SessionClock.IstOffset;
+            var liveSignals = await loader.LoadLiveSignalsAsync(fromIst);
+            var liveAudit = await loader.LoadLiveAuditAsync(fromIst);
+            var changed = await loader.LoadSettingsChangedSinceAsync(fromIst);
+            var parityEvaluator = new EntryEvaluator(live, trading, instruments, SelectorMode.Replay,
+                new EntryRules { SkipBreakoutProtection = skipBreakout }, tradingMode);
+
+            // P&L: every replay entry is priced with the grid's exit replay (live stop ladder, real option prices where stored);
+            // every real signal with its TradeJournal P&L.
+            var parityExit = ExitModel.From(live, trading, exitInputs.AvgDelta, exitInputs.AvgPremium, exitInputs.LotSizes);
+            var paritySimulator = new ExecutionSimulator(parityEvaluator, live, parityExit, options, quotes);
+            var livePnl = await loader.LoadLivePnlBySignalAsync(liveSignals.Select(x => x.Id).ToList());
+
+            // Only decision minutes from --from onward; the earlier bars were loaded to warm the indicators up.
+            var parityRows = SignalParityReport.Build(data, parityEvaluator, liveSignals, liveAudit, fromIst, paritySimulator, livePnl);
+            var header =
+                $"From {fromIst:yyyy-MM-dd} IST; live StrategySettings" +
+                (overrides.Count == 0 ? "" : " with overrides " + string.Join(", ", overrides.Select(x => $"{x.Key}{(x.Symbol is null ? "" : "@" + x.Symbol)}={x.Value}"))) +
+                $"; trading mode {tradingMode?.ToString() ?? "unknown"}; BreakoutProtection {(skipBreakout ? "forced OFF" : "from StrategySettings")}; " +
+                "selector replayed (MarketRegimeGate, Range/Reversal/NoTrade/News routing); 5m confirmation, " +
+                "Chop/FastEma/SessionTrend/EarlyTrend/IndexStopFloor/AtrGate replayed; stateful gates are reported, not replayed.";
+
+            if (changed.Count > 0)
+            {
+                var overridden = overrides.Select(x => (x.Key.ToUpperInvariant(), x.Symbol?.ToUpperInvariant())).ToHashSet();
+                header += "\n\n**Settings changed on or after the replay start - the replay uses today's value unless overridden with --set:**\n\n" +
+                          "| SettingKey | Symbol | Current value | Active | UpdatedOn | Overridden |\n|---|---|---:|---|---|---|\n" +
+                          string.Join("\n", changed.Select(c =>
+                              $"| {c.SettingKey} | {c.Symbol ?? "(global)"} | {c.SettingValue} | {c.IsActive} | {c.UpdatedOn:yyyy-MM-dd HH:mm} | " +
+                              $"{(overridden.Contains((c.SettingKey.ToUpperInvariant(), c.Symbol?.ToUpperInvariant())) ? "yes" : "NO")} |"));
+            }
+            SignalParityReport.Write(outDir, parityRows, header);
+
+            // Clean output: only the replay's own trades, simulated like live - one open position across every symbol and
+            // both sides (OnePositionGate), same-side cooldown after a stop, live stop ladder, real option prices where stored.
+            var cleanRun = paritySimulator.Run(
+                SignalParityReport.From(data, fromIst),
+                new SimulationOptions(TradeSide.Call, StopModel.Live, PremiumMode.OptionHistoryWhereAvailable, null, BothSides: true,
+                    DayRisk: DayRiskLimits.From(trading, tradingMode)));
+            SignalParityReport.WriteBacktestTrades(outDir, cleanRun.Trades, liveSignals);
+            Console.WriteLine(
+                $"Backtest trades: {cleanRun.Trades.Count} ({cleanRun.Trades.Count(t => t.PnlRs > 0)} win / " +
+                $"{cleanRun.Trades.Count(t => t.PnlRs <= 0)} loss), gross P&L {cleanRun.Trades.Sum(t => t.PnlRs):+0.00;-0.00} Rs " +
+                $"-> {Path.Combine(outDir, "backtest-trades.csv")}");
+
+            Console.WriteLine(SignalParityReport.Summary(parityRows, header));
+            Console.WriteLine($"Wrote {Path.Combine(outDir, "signal-parity.csv")} and signal-parity-summary.md ({parityRows.Count} rows).");
             return 0;
         }
 
@@ -441,7 +588,10 @@ internal static class Program
             trading,
             instruments,
             exitInputs,
-            options);
+            options,
+            tradingMode,
+            skipBreakout,
+            quotes);
 
         // Existing simulated trades export.
         if (o.Has("sim-trades"))
@@ -476,6 +626,21 @@ internal static class Program
 
             foreach (var s in sides)
                 runner.Run(data, ConfigurationCatalog.BuildBaseRate(s), sopts);
+
+            // Footer: totals over every replayed trade (gross P&L, costs, net) - overall and per symbol.
+            var simTrades = lines.Skip(1)
+                .Select(l => l.Split(','))
+                .Select(f => (Symbol: f[0], Pnl: double.Parse(f[7], CultureInfo.InvariantCulture),
+                    Cost: double.TryParse(f[8], NumberStyles.Float, CultureInfo.InvariantCulture, out var c) ? c : 0))
+                .ToList();
+            string Footer(string label, IReadOnlyList<(string Symbol, double Pnl, double Cost)> t) =>
+                $"{label},,,,{t.Count} trades: {t.Count(x => x.Pnl > 0)} win / {t.Count(x => x.Pnl <= 0)} loss," +
+                $"gross {t.Sum(x => x.Pnl):+0.##;-0.##;0},net {t.Sum(x => x.Pnl - x.Cost):+0.##;-0.##;0}," +
+                $"{t.Sum(x => x.Pnl):+0.##;-0.##;0},{t.Sum(x => x.Cost):0.##},";
+            lines.Add("");
+            foreach (var g in simTrades.GroupBy(x => x.Symbol).OrderBy(g => g.Key))
+                lines.Add(Footer($"TOTAL_{g.Key}", g.ToList()));
+            lines.Add(Footer("TOTAL", simTrades));
 
             var spath = Path.Combine(outDir, "sim-trades.csv");
 
@@ -555,7 +720,8 @@ internal static class Program
 
         var assumptions =
             $"Stop model {runOptions.StopModel}; premium {runOptions.PremiumMode} " +
-            "(real option prices exist from 2026-10-07 only, earlier trades use index move x average delta); " +
+            "(real option prices exist from 2026-10-07 only; earlier trades use the real entry quote stored in Signals / IndicatorSnapshots " +
+            "x index move where one exists, else index move x average delta); " +
             $"selector {runOptions.SelectorMode}; costs " +
             $"{(runOptions.Costs is null ? "NOT modelled (NetProfitAfterCosts = NULL)" : "modelled")}; " +
             "settings = current StrategySettings applied to every day; " +
@@ -572,6 +738,60 @@ internal static class Program
             $"Wrote {Path.Combine(outDir, "grid.csv")} and ranking.md ({rows.Count} rows).");
 
         return 0;
+    }
+
+    /// <summary>
+    /// Live settings whose effect the replay cannot reproduce (or reproduces although production does not), so a run that
+    /// claims "live rules" is not silently different from production.
+    /// </summary>
+    private static IEnumerable<string> ParityWarnings(BacktestSettings live, bool selectorReplayed)
+    {
+        foreach (var symbol in ExitModel.SymbolNames)
+        {
+            foreach (var (key, why) in new[]
+            {
+                ("EnableCrossIndexAgreementGate", "CrossIndexAgreementGate is live but not replayed (needs the other indices' bars at the second)"),
+                ("EnableMarketDirectionGate", "MarketDirectionGate is live but not replayed (reads the *_FUT_5m series)"),
+                ("EnablePutS1Gate", "PutS1Gate is live but not replayed (needs the entry leg's option delta)"),
+                ("EnableStaleEntryGate", "StaleEntryGate is live but not replayed (needs feed lag; ideal data never trips it)"),
+            })
+            {
+                if (live.GetBool(key, symbol, false))
+                    yield return $"{symbol}: {key}=1 - {why}.";
+            }
+
+            if (live.GetBool("EnableNoTradeWindowGate", symbol, false))
+                yield return $"{symbol}: EnableNoTradeWindowGate=1 - the replay applies NoTradeWindowGate, but SignalWorker.PostGates does NOT register it, so production ignores this row.";
+
+            if (live.IsSettingActive("MinDirectionalConfidence", symbol))
+                yield return $"{symbol}: MinDirectionalConfidence is active - the confidence floor is not replayed.";
+
+            if (live.GetBool("EnableConsecutiveLossGate", symbol, true))
+                yield return $"{symbol}: ConsecutiveLossGate is on - replayed on the simulated trades (backtest-trades and grid), " +
+                             "not on the per-minute signal-parity rows.";
+        }
+
+        if (!selectorReplayed)
+            yield return "selector not replayed: MarketRegimeGate and the Range/Reversal/NoTrade/News routing (BlockRangeMarketState) are skipped. Pass --regime-replay for production behaviour.";
+    }
+
+    /// <summary>"KEY=VALUE[@SYMBOL],..." -> (key, symbol or null for the global row, value).</summary>
+    private static List<(string Key, string? Symbol, decimal Value)> ParseOverrides(string csv)
+    {
+        var result = new List<(string, string?, decimal)>();
+        foreach (var item in csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var eq = item.IndexOf('=');
+            if (eq <= 0)
+                throw new ArgumentException($"--set item '{item}' is not KEY=VALUE[@SYMBOL]");
+            var key = item[..eq].Trim();
+            var rest = item[(eq + 1)..];
+            var at = rest.IndexOf('@');
+            var symbol = at >= 0 ? rest[(at + 1)..].Trim().ToUpperInvariant() : null;
+            var value = decimal.Parse(at >= 0 ? rest[..at] : rest, System.Globalization.CultureInfo.InvariantCulture);
+            result.Add((key, string.IsNullOrEmpty(symbol) ? null : symbol, value));
+        }
+        return result;
     }
 
     private static decimal[] Decimals(string csv) =>

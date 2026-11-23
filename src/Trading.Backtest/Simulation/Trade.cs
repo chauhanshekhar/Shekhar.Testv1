@@ -9,6 +9,12 @@ public enum PremiumSource
     IndexDeltaModel,
     /// <summary>Stored OptionMinuteHistory LTP of the ATM contract (from 2026-10-07 only).</summary>
     OptionMinuteHistory,
+    /// <summary>
+    /// No minute history, but the database recorded the real option quote the live engine saw at (or up to 2 minutes
+    /// before) the entry minute - Signals.OptionLtp / DeltaAtEntry or IndicatorSnapshots.BlockedOptionLtp / BlockedDelta.
+    /// Entry premium and delta are real; the path after entry is index move x that real delta.
+    /// </summary>
+    DbEntryQuoteDeltaModel,
 }
 
 /// <summary>One simulated position (partial exits are folded into a single trade, like the journal aggregated by SignalId).</summary>

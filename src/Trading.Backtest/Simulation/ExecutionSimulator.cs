@@ -37,7 +37,22 @@ public sealed record SimulationOptions(
     bool DisableHandoffCooldown = false,
     int? KeepEveryNth = null,
     bool BothSides = false,
-    bool LogSignals = false);
+    bool LogSignals = false,
+    DayRiskLimits? DayRisk = null);
+
+/// <summary>
+/// The live day-level stops, replayed when supplied (null = not replayed, the old behaviour):
+///   ConsecutiveLossGate - the last N closed trades of the IST day, ALL symbols, all losses -> no more trades that day
+///     (N from StrategySettings via ConsecutiveLossGate.ResolveLimit; compiled default TradingSettings.MaxConsecLosses);
+///   daily loss limit - AdaptiveLotSizingService (EnableDailyLossLimit, budget = Capital x MaxLossPercent / 100).
+/// Only trades already closed at the decision time count, as in TradeJournal. Unrealised P&amp;L is taken as 0: with one
+/// position slot nothing is open when a new entry is considered.
+/// </summary>
+public sealed record DayRiskLimits(int CompiledMaxConsecLosses, decimal Capital, decimal MaxLossPercent, bool IsPaper)
+{
+    public static DayRiskLimits From(Trading.Infrastructure.TradingSettings t, Trading.Domain.Entities.TradingMode? mode) =>
+        new(t.MaxConsecLosses, t.Capital, t.MaxLossPercent, mode == Trading.Domain.Entities.TradingMode.Paper);
+}
 
 /// <summary>
 /// Per-signal execution log.
@@ -101,17 +116,21 @@ public sealed class ExecutionSimulator
     private readonly BacktestSettings _settings;
     private readonly ExitModel _exit;
     private readonly OptionHistoryIndex? _options;
+    private readonly EntryQuoteIndex? _quotes;
 
+    /// <param name="quotes">Real entry quotes from the database for days without OptionMinuteHistory (null = average-premium model).</param>
     public ExecutionSimulator(
         EntryEvaluator entry,
         BacktestSettings settings,
         ExitModel exit,
-        OptionHistoryIndex? options)
+        OptionHistoryIndex? options,
+        EntryQuoteIndex? quotes = null)
     {
         _entry = entry;
         _settings = settings;
         _exit = exit;
         _options = options;
+        _quotes = quotes;
     }
 
     public SimulationResult Run(
@@ -145,6 +164,9 @@ public sealed class ExecutionSimulator
             new Dictionary<(string, DateTime), int>();
 
         var validEntrySeen = 0;
+
+        // Closed trades per IST exit date, for the day-level gates (TradeJournal is stamped at the exit).
+        var closedByIstDay = new Dictionary<DateTime, List<Trade>>();
 
         foreach (var (p, d, _) in timeline)
             foreach (var side in sides)
@@ -222,6 +244,21 @@ public sealed class ExecutionSimulator
                 var symbol = p.Symbol;
                 var nowIst = p.TimeIst;
 
+                // ConsecutiveLossGate (live pre-gate, runs before OnePositionGate).
+                if (opt.DayRisk is { } risk)
+                {
+                    var limit = ConsecutiveLossGate.ResolveLimit(_settings, symbol, risk.CompiledMaxConsecLosses, risk.IsPaper);
+                    if (limit > 0 && ClosedToday(closedByIstDay, p) is { Count: > 0 } today)
+                    {
+                        var recent = today.OrderByDescending(t => t.ExitUtc).Take(limit).ToList();
+                        if (recent.Count >= limit && recent.All(t => t.PnlRs < 0))
+                        {
+                            Rej("ConsecutiveLossGate");
+                            continue;
+                        }
+                    }
+                }
+
                 if (opt.MaxTradesPerSymbolDay is { } cap &&
                     tradesPerSymbolDay.GetValueOrDefault(
                         (symbol, p.TimeIst.Date)) >= cap)
@@ -248,6 +285,20 @@ public sealed class ExecutionSimulator
                         string.Join('+', open.Select(o => o.Symbol)));
 
                     continue;
+                }
+
+                // Daily loss limit (AdaptiveLotSizingService: 0 lots = no trade), after the strategy is chosen.
+                if (opt.DayRisk is { } lossRisk &&
+                    _settings.GetBool(Trading.Worker.AdaptiveLotSizingService.EnableDailyLossLimitKey, symbol, true) &&
+                    ClosedToday(closedByIstDay, p) is { Count: > 0 } closedToday)
+                {
+                    var grossLoss = (decimal)Math.Abs(closedToday.Where(t => t.PnlRs < 0).Sum(t => t.PnlRs));
+                    var net = (decimal)closedToday.Sum(t => t.PnlRs);
+                    if (Trading.Worker.AdaptiveLotSizingService.DailyLossReason(lossRisk.Capital, lossRisk.MaxLossPercent, grossLoss, net, 0m) is not null)
+                    {
+                        Rej("DailyLossLimit");
+                        continue;
+                    }
                 }
 
                 // OI confirmation.
@@ -363,6 +414,11 @@ public sealed class ExecutionSimulator
 
                 result.Trades.Add(trade);
 
+                var exitDay = (trade.ExitUtc + SessionClock.IstOffset).Date;
+                if (!closedByIstDay.TryGetValue(exitDay, out var dayList))
+                    closedByIstDay[exitDay] = dayList = [];
+                dayList.Add(trade);
+
                 if (opt.LogSignals)
                 {
                     result.Log.Add(new SignalLogRow(
@@ -397,11 +453,26 @@ public sealed class ExecutionSimulator
         return result;
     }
 
+    /// <summary>Trades of the decision's IST day that were already closed at the decision time.</summary>
+    private static List<Trade>? ClosedToday(Dictionary<DateTime, List<Trade>> byDay, MarketPoint p) =>
+        byDay.TryGetValue(p.TimeIst.Date, out var list)
+            ? list.Where(t => t.ExitUtc <= p.TimeUtc).ToList()
+            : null;
+
     private static void Block(SimulationResult r, string gate)
     {
         r.BlockedBy[gate] =
             r.BlockedBy.GetValueOrDefault(gate) + 1;
     }
+
+    /// <summary>
+    /// One trade entered at <paramref name="p"/> with the same exit replay Run uses (live stop ladder, option-minute prices
+    /// where stored, else index move x average delta), ignoring every queueing gate. Used by the signal-parity report to put
+    /// a P&amp;L on a single entry minute. Gross: no costs.
+    /// </summary>
+    public Trade? ExecuteAt(MarketPoint p, SymbolData d, TradeSide side, string entryPath,
+        StopModel stopModel = StopModel.Live, PremiumMode premiumMode = PremiumMode.OptionHistoryWhereAvailable) =>
+        Execute(p, d, new SimulationOptions(side, stopModel, premiumMode, null), side, entryPath);
 
     private Trade? Execute(
         MarketPoint p,
@@ -465,6 +536,18 @@ public sealed class ExecutionSimulator
             }
         }
 
+        // No minute history: price the entry with the real quote the live engine stored at that minute (Signals /
+        // IndicatorSnapshots), instead of the all-time average premium and delta.
+        if (source == PremiumSource.IndexDeltaModel &&
+            opt.PremiumMode == PremiumMode.OptionHistoryWhereAvailable &&
+            _quotes?.AtOrBefore(p.Symbol, side, p.TimeIst) is { Ltp: > 0, Delta: > 0 } quote)
+        {
+            source = PremiumSource.DbEntryQuoteDeltaModel;
+            delta = quote.Delta;
+            entryPremium = quote.Ltp;
+            path = indexMoves.Select(m => m * delta).ToArray();
+        }
+
         var r = _exit.IndexStopPoints(p.Atr) * delta;
 
         var local = cfg with
@@ -485,7 +568,7 @@ public sealed class ExecutionSimulator
         var pnl = replay.PnlPoints * cfg.LotSize;
 
         double? cost = opt.Costs is { } c
-            ? c.Cost(replay.Orders, cfg.LotSize, _exit.Lots)
+            ? c.Cost(replay.Orders, cfg.LotSize, cfg.Lots ?? _exit.Lots)
             : null;
 
         var exitUtc = closeTimes[

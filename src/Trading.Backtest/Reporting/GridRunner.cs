@@ -32,11 +32,19 @@ public sealed class GridRunner
     private readonly IReadOnlyList<TradingInstrument> _instruments;
     private readonly ExitModelInputs _exitInputs;
     private readonly OptionHistoryIndex? _options;
+    private readonly TradingMode? _tradingMode;
+    private readonly bool _skipBreakout;
+    private readonly EntryQuoteIndex? _quotes;
 
+    /// <param name="tradingMode">Live trading mode replayed for the entry trigger candle (see EntryEvaluator); null = 1m bar.</param>
     public GridRunner(BacktestSettings live, TradingSettings trading, IReadOnlyList<TradingInstrument> instruments,
-        ExitModelInputs exitInputs, OptionHistoryIndex? options)
+        ExitModelInputs exitInputs, OptionHistoryIndex? options, TradingMode? tradingMode = null, bool skipBreakout = false,
+        EntryQuoteIndex? quotes = null)
     {
         _live = live; _trading = trading; _instruments = instruments; _exitInputs = exitInputs; _options = options;
+        _tradingMode = tradingMode;
+        _skipBreakout = skipBreakout;
+        _quotes = quotes;
     }
 
     public List<GridRow> Run(IReadOnlyList<SymbolData> data, IEnumerable<BacktestConfiguration> configs, GridRunOptions opt,
@@ -51,11 +59,12 @@ public sealed class GridRunner
         foreach (var config in configList)
         {
             var settings = config.Apply(_live);
-            var evaluator = new EntryEvaluator(settings, _trading, _instruments, opt.SelectorMode, config.Rules);
+            var rules = _skipBreakout ? (config.Rules ?? new EntryRules()) with { SkipBreakoutProtection = true } : config.Rules;
+            var evaluator = new EntryEvaluator(settings, _trading, _instruments, opt.SelectorMode, rules, _tradingMode);
             var exit = ExitModel.From(settings, _trading, _exitInputs.AvgDelta, _exitInputs.AvgPremium, _exitInputs.LotSizes);
             if (config.Exit is { } geometry)
                 exit = geometry.ApplyTo(exit);
-            var sim = new ExecutionSimulator(evaluator, settings, exit, _options);
+            var sim = new ExecutionSimulator(evaluator, settings, exit, _options, _quotes);
             var simOptions = new SimulationOptions(config.Side, opt.StopModel, opt.PremiumMode, opt.Costs,
                 MaxTradesPerSymbolDay: config.Sampling?.MaxTradesPerSymbolDay ?? config.Rules?.Trend?.MaxTradesPerSymbolDay,
                 MaxConcurrentPositions: config.Slots?.MaxConcurrent ?? 1,
@@ -63,7 +72,8 @@ public sealed class GridRunner
                 DisableHandoffCooldown: config.Slots?.NoHandoffCooldown ?? false,
                 KeepEveryNth: config.Sampling?.KeepEveryNth,
                 BothSides: config.Slots?.SharedBothSides ?? false,
-                LogSignals: opt.LogSignals);
+                LogSignals: opt.LogSignals,
+                DayRisk: DayRiskLimits.From(_trading, _tradingMode));
 
             foreach (var symbol in data.Select(d => d.Symbol).Append("ALL"))
             {
