@@ -49,6 +49,20 @@ public sealed record MarketPoint
     /// <summary>Opening gap: (first bar open of today - last close of the previous session) / previous close x 100; null on the first session in the data.</summary>
     public double? OpenGapPct { get; init; }
 
+    // ── live-parity inputs, filled by MarketSeriesBuilder.Build. Defaults mean "not replayed" and the evaluator falls back ──
+    /// <summary>Close of the previous session's last 1m bar: the live YesterdayClose (and the tick prevClose fallback). Null for the first session.</summary>
+    public double? PrevClose { get; init; }
+    /// <summary>Highest high of today's closed 1m bars from the session's first bar (live DayHigh is the tick's session high). 0 = not set.</summary>
+    public double SessionHigh { get; init; }
+    /// <summary>Today's last closed 5m bar - live MarketSnapshot.LastClosed5mCandle, the Paper-mode trigger candle. Null before one closes.</summary>
+    public Bar? LastClosed5mToday { get; init; }
+    /// <summary>ChopGate's 15-bar chop over the last 15 closed 1m bars; null when ChopGate would let the signal through for lack of data.</summary>
+    public double? Chop15 { get; init; }
+    /// <summary>BreakoutProtectionService decision after today's closed 1m bars (CALL side). Null = not replayed.</summary>
+    public global::Trading.Worker.SignalGates.BreakoutDecision? BreakoutCall { get; init; }
+    /// <summary>BreakoutProtectionService decision after today's closed 1m bars (PUT side). Null = not replayed.</summary>
+    public global::Trading.Worker.SignalGates.BreakoutDecision? BreakoutPut { get; init; }
+
     // ── from the real MarketRegimeService / MarketClassificationService, run on the rebuilt inputs (RegimeEnricher); null until enriched ──
     public string? RegimeTrend { get; init; }
     public string? RegimeVolatility { get; init; }
@@ -75,9 +89,18 @@ public static class SessionClock
 {
     public static readonly TimeSpan IstOffset = TimeSpan.FromHours(5) + TimeSpan.FromMinutes(30);
 
-    /// <summary>Entry window used by the validated research scripts: 09:20 IST to 15:15 IST (exclusive), expressed in UTC.</summary>
+    /// <summary>Session open (09:15 IST) and force-exit time (15:15 IST, = MarketHours.ForceExit), expressed in UTC. The exit
+    /// simulator closes every open trade at EntryEndUtc.</summary>
     public static readonly TimeSpan EntryStartUtc = new(3, 45, 0);
     public static readonly TimeSpan EntryEndUtc = new(9, 45, 0);
+
+    /// <summary>
+    /// Live signal window, taken from <see cref="Trading.Domain.MarketHours"/> so the replay can never drift from production:
+    /// SignalWorker only generates signals while MarketHours.IsSignalWindow() is true, i.e. SignalOpen (09:25 IST) to
+    /// SignalClose (15:10 IST), both inclusive. Decision minutes outside this window are not built.
+    /// </summary>
+    public static readonly TimeSpan SignalStartUtc = global::Trading.Domain.MarketHours.SignalOpen - IstOffset;
+    public static readonly TimeSpan SignalEndUtc = global::Trading.Domain.MarketHours.SignalClose - IstOffset;
 
     /// <summary>Minutes after IST midnight for a UTC instant.</summary>
     public static int MinuteOfDayIst(DateTime utc)
@@ -114,4 +137,29 @@ public sealed class OptionMinuteRow
     /// <summary>Open interest of the contract at that minute (the live OI gate differences it between snapshots).</summary>
     public long OpenInterest { get; set; }
     public decimal UnderlyingLtp { get; set; }
+}
+
+/// <summary>One persisted live signal (Signals table), for the signal-parity report.</summary>
+public sealed class LiveSignalRow
+{
+    public long Id { get; set; }
+    public string Symbol { get; set; } = "";
+    public string SignalType { get; set; } = "";
+    public DateTime CreatedOn { get; set; }
+    public string StrategyType { get; set; } = "";
+    public string SelectedStrategy { get; set; } = "";
+    public string MarketState { get; set; } = "";
+    public string Status { get; set; } = "";
+    public string? ExitReason { get; set; }
+}
+
+/// <summary>The live audit for one symbol-minute: the dominant BlockedBy and whether any cycle generated a signal.</summary>
+public sealed class LiveAuditMinuteRow
+{
+    public string Symbol { get; set; } = "";
+    public DateTime MinuteIst { get; set; }
+    public string BlockedBy { get; set; } = "";
+    public string? SampleReason { get; set; }
+    public int Cycles { get; set; }
+    public int AnyGenerated { get; set; }
 }

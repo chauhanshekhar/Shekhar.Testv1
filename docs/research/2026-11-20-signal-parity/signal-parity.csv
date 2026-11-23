@@ -1,0 +1,34 @@
+Status,Symbol,Side,MinuteIst,LiveSignalId,BacktestBlockedBy,BacktestReasonOrPath,LiveBlockedBy,LiveReason,Note,BacktestPnlRs,BacktestExitReason,PremiumSource,LivePnlRs
+BACKTEST_ONLY,BANKNIFTY,CALL,2026-11-20 09:53,,"","AND_CHAIN","StrategySelector","BANKNIFTY: invalid indicator data","live cycles in minute=57 anyGenerated=0",-1370.21,"OPTION_SL_HIT",IndexDeltaModel,
+BACKTEST_ONLY,BANKNIFTY,CALL,2026-11-20 10:29,,"","AND_CHAIN","StrategySelector","BANKNIFTY: invalid indicator data","live cycles in minute=57 anyGenerated=0",+1258.43,"PARTIAL_T1",IndexDeltaModel,
+BACKTEST_ONLY,BANKNIFTY,CALL,2026-11-20 10:37,,"","AND_CHAIN","StrategySelector","BANKNIFTY: invalid indicator data","live cycles in minute=57 anyGenerated=0",+1189.47,"PARTIAL_T1",IndexDeltaModel,
+MATCH,BANKNIFTY,CALL,2026-11-20 10:48,10434,"","AND_CHAIN","","","live SINGLE/Directional/Breakout status=CLOSED exit=OPTION_SL_HIT",+1079.19,"PARTIAL_T1",IndexDeltaModel,+1567.50
+BACKTEST_ONLY_STATEFUL,BANKNIFTY,CALL,2026-11-20 10:51,,"","AND_CHAIN","DuplicateSignalGate","Cooldown active after OPTION_SL_HIT","live cycles in minute=51 anyGenerated=0",-839.40,"OPTION_SL_HIT",IndexDeltaModel,
+MATCH,BANKNIFTY,CALL,2026-11-20 11:16,10435,"","AND_CHAIN","","","live SINGLE/Directional/Breakout status=CLOSED exit=OPTION_SL_HIT",+974.24,"PARTIAL_T1",IndexDeltaModel,+1059.00
+BACKTEST_ONLY_STATEFUL,BANKNIFTY,CALL,2026-11-20 11:21,,"","AND_CHAIN","DuplicateSignalGate","Cooldown active after OPTION_SL_HIT","live cycles in minute=32 anyGenerated=0",+0.14,"PROTECTED_SL_HIT",IndexDeltaModel,
+BACKTEST_ONLY_STATEFUL,BANKNIFTY,CALL,2026-11-20 11:23,,"","AND_CHAIN","DuplicateSignalGate","Cooldown active after OPTION_SL_HIT","live cycles in minute=54 anyGenerated=0",+0.14,"PROTECTED_SL_HIT",IndexDeltaModel,
+MATCH,BANKNIFTY,CALL,2026-11-20 11:38,10436,"","AND_CHAIN","","","live SINGLE/Directional/Breakout status=CLOSED exit=OPTION_SL_HIT",+938.35,"PARTIAL_T1",IndexDeltaModel,+1363.20
+BACKTEST_ONLY_STATEFUL,BANKNIFTY,CALL,2026-11-20 11:41,,"","AND_CHAIN","DuplicateSignalGate","Cooldown active after OPTION_SL_HIT","live cycles in minute=50 anyGenerated=0",+935.20,"PARTIAL_T1",IndexDeltaModel,
+LIVE_ONLY,BANKNIFTY,CALL,2026-11-20 11:52,10437,"AndChain","4 LTP > Prev5mHigh + 5 (63510.15)","","","live SINGLE/Directional/Breakout status=CLOSED exit=OPTION_SL_HIT",,"",,+1427.70
+BACKTEST_ONLY_STATEFUL,BANKNIFTY,CALL,2026-11-20 11:53,,"","AND_CHAIN","OnePositionGate","Open position exists — new signal suppressed (BANKNIFTY); holding SignalId=10437 BANKNIFTY CALL status=PARTIAL_EXIT_PENDING","live cycles in minute=54 anyGenerated=0",+1024.83,"PARTIAL_T1",IndexDeltaModel,
+MATCH,BANKNIFTY,CALL,2026-11-20 11:59,10438,"","AND_CHAIN","","","live SINGLE/Directional/StrongTrend status=CLOSED exit=OPTION_SL_HIT",+1277.71,"PARTIAL_T1",IndexDeltaModel,-1608.00
+LIVE_ONLY,BANKNIFTY,CALL,2026-11-20 12:04,10439,"NoTradeWindowGate","No-trade window 12:00-12:30 IST (now 12:04)","","","live SINGLE/Directional/StrongTrend status=CLOSED exit=OPTION_SL_HIT",,"",,-1866.00
+LIVE_ONLY,BANKNIFTY,CALL,2026-11-20 12:23,10440,"NoTradeWindowGate","No-trade window 12:00-12:30 IST (now 12:23)","","","live SINGLE/Directional/StrongTrend status=CLOSED exit=OPTION_SL_HIT",,"",,-57.00
+BACKTEST_ONLY_STATEFUL,BANKNIFTY,CALL,2026-11-20 12:33,,"","AND_CHAIN","ConsecutiveLossGate","Circuit breaker: 3 consecutive losses — no more trades today (BANKNIFTY)","live cycles in minute=54 anyGenerated=0",+1316.77,"PARTIAL_T1",OptionMinuteHistory,
+MATCH,BANKNIFTY,CALL,2026-11-20 12:51,10441,"","AND_CHAIN","","","live SINGLE/Directional/StrongTrend status=CLOSED exit=OPTION_SL_HIT",-1160.38,"OPTION_SL_HIT",OptionMinuteHistory,-1984.80
+BACKTEST_ONLY_STATEFUL,BANKNIFTY,CALL,2026-11-20 13:03,,"","AND_CHAIN","CircuitBreakerGate","Circuit breaker: daily loss ₹5516 >= ₹4000 limit (BANKNIFTY)","live cycles in minute=54 anyGenerated=0",+1489.55,"PARTIAL_T1",OptionMinuteHistory,
+BACKTEST_ONLY_STATEFUL,BANKNIFTY,CALL,2026-11-20 13:06,,"","AND_CHAIN","CircuitBreakerGate","Circuit breaker: daily loss ₹5516 >= ₹4000 limit (BANKNIFTY)","live cycles in minute=54 anyGenerated=0",0.00,"PROTECTED_SL_HIT",OptionMinuteHistory,
+MATCH,BANKNIFTY,CALL,2026-11-20 13:41,10442,"","AND_CHAIN","","","live SINGLE/Directional/Breakout status=CLOSED exit=OPTION_SL_HIT",-1027.71,"OPTION_SL_HIT",OptionMinuteHistory,-1762.80
+BACKTEST_ONLY_STATEFUL,BANKNIFTY,CALL,2026-11-20 13:46,,"","AND_CHAIN","OnePositionGate","Open position exists — new signal suppressed (BANKNIFTY); holding SignalId=10442 BANKNIFTY CALL status=ACTIVE","live cycles in minute=53 anyGenerated=0",-909.10,"OPTION_SL_HIT",OptionMinuteHistory,
+BACKTEST_ONLY_STATEFUL,BANKNIFTY,CALL,2026-11-20 13:48,,"","AND_CHAIN","OnePositionGate","Open position exists — new signal suppressed (BANKNIFTY); holding SignalId=10442 BANKNIFTY CALL status=ACTIVE","live cycles in minute=53 anyGenerated=0",-872.16,"OPTION_SL_HIT",OptionMinuteHistory,
+MATCH,BANKNIFTY,CALL,2026-11-20 14:02,10443,"","AND_CHAIN","","","live SINGLE/Directional/Breakout status=ORDER_REJECTED exit=",-746.49,"OPTION_SL_HIT",OptionMinuteHistory,
+LIVE_ONLY,BANKNIFTY,CALL,2026-11-20 14:15,10444,"AndChain","4 LTP > Prev5mHigh + 5 (64540.55)","","","live SINGLE/Directional/Breakout status=CLOSED exit=OPTION_SL_HIT",,"",,+1934.70
+BACKTEST_ONLY_STATEFUL,BANKNIFTY,CALL,2026-11-20 14:16,,"","AND_CHAIN","OnePositionGate","Open position exists — new signal suppressed (BANKNIFTY); holding SignalId=10444 BANKNIFTY CALL status=ACTIVE","live cycles in minute=52 anyGenerated=0",+1205.92,"PARTIAL_T1",OptionMinuteHistory,
+MATCH,BANKNIFTY,CALL,2026-11-20 14:59,10445,"","AND_CHAIN","","","live SINGLE/Directional/Breakout status=CLOSED exit=OPTION_SL_HIT",0.00,"PROTECTED_SL_HIT",OptionMinuteHistory,+1309.20
+BACKTEST_ONLY_STATEFUL,BANKNIFTY,CALL,2026-11-20 15:04,,"","AND_CHAIN","OnePositionGate","Open position exists — new signal suppressed (BANKNIFTY); holding SignalId=10445 BANKNIFTY CALL status=ACTIVE","live cycles in minute=52 anyGenerated=0",-859.06,"OPTION_SL_HIT",OptionMinuteHistory,
+BACKTEST_ONLY_STATEFUL,BANKNIFTY,CALL,2026-11-20 15:06,,"","AND_CHAIN","DuplicateSignalGate","Cooldown active after OPTION_SL_HIT","live cycles in minute=35 anyGenerated=0",-789.59,"OPTION_SL_HIT",OptionMinuteHistory,
+
+TOTAL_BACKTEST,,,,,"all replay entries: 24 trades, 13 win / 11 loss",,,,,+4115.87,,,
+TOTAL_BACKTEST_EXCL_STATEFUL,,,,,"without entries a live position/cooldown blocked: 11 trades, 6 win / 5 loss",,,,,+2412.61,,,
+TOTAL_MATCH,,,,,"signals both took (backtest vs live): 8 trades, 4 win / 4 loss",,,,,+1334.92,,,-56.70
+TOTAL_LIVE,,,,,"real signals (TradeJournal): 11 trades, 6 win / 5 loss",,,,,,,,+1382.70

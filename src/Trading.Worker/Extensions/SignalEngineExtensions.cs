@@ -5,6 +5,7 @@ using Trading.SignalEngine.Scoring.Services;
 using Trading.SignalEngine.Services;
 using Trading.SignalEngine.Strategies;
 using Trading.Worker.Exits;
+using Trading.Worker.SignalGates;
 using Trading.Worker.Strategies;
 
 namespace Trading.Worker.Extensions;
@@ -40,6 +41,11 @@ internal static class SignalEngineExtensions
         services.AddScoped(sp => new SingleSignalRuleEvaluator(
             sp.GetRequiredService<IStrategySettingsService>()));
         services.AddScoped<FiveMinuteConfirmationService>();
+        // BreakoutProtectionService keeps per-symbol, per-side breakout state for the whole session (day high/low,
+        // breakout level, pullback) in a ConcurrentDictionary, so it MUST be a singleton: a scoped instance would be
+        // rebuilt every SignalWorker cycle from only the 200-bar window. StrategyManager (scoped) requires it; without
+        // this registration resolving StrategyManager throws and no signal is generated.
+        services.AddSingleton<BreakoutProtectionService>();
         services.AddScoped<StrategyManager>();
 
         // ── Per-instrument signal generation ─────────────────────────────────

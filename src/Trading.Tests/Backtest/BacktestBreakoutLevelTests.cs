@@ -24,9 +24,11 @@ public class BacktestBreakoutLevelTests
         Assert.True(Eval().Evaluate(p, TradeSide.Call).Candidate);                 // live rules: filter off, unchanged
     }
 
+    // Live SignalEngineService.EvaluateCall condition 4: LTP > Prev5mHigh + 5 points (compiled buffer). CallPoint's LTP is 23940.
     [Theory]
-    [InlineData(23939.0, true)]      // LTP (23940 for CallPoint) closes above the 5m high
-    [InlineData(23940.0, false)]     // equal is not a break
+    [InlineData(23934.0, true)]      // 23940 > 23934 + 5
+    [InlineData(23935.0, false)]     // 23940 = 23935 + 5: equal is not a break
+    [InlineData(23939.0, false)]     // above the high but inside the 5-point buffer
     [InlineData(24500.0, false)]
     public void CallNeedsAClosedPriceAboveThePrevious5mHighWhenOn(double prev5mHigh, bool expected)
     {
