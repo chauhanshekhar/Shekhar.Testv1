@@ -1,9 +1,12 @@
 using Trading.Backtest.Data;
+using Trading.Domain.Entities;
+using Trading.Worker.SignalGates;
 
 namespace Trading.Backtest.Indicators;
 
 /// <summary>
-/// Rebuilds the live indicator inputs for every decision minute from CLOSED bars only (no look-ahead):
+/// Rebuilds the live indicator inputs for every decision minute from CLOSED bars only (no look-ahead). Decision minutes run
+/// from SessionClock.SignalStartUtc to SignalEndUtc (09:25-15:10 IST, the live signal window):
 ///   1m window  = last 200 closed 1m bars (crosses days); EMA20/EMA50/RSI(14) over that window;
 ///   5m window  = last 100 closed 5m bars; RSI(14) and EMA20/EMA50 over that window;
 ///   ATR(14)    = Wilder over TODAY's bars inside the 1m window (the last 14 bars of the window while today has fewer than 14);
@@ -34,14 +37,29 @@ public static class MarketSeriesBuilder
         foreach (var date in t1.Select(t => t.Date).Distinct())
         {
             var dayStart = LowerBound(t1, date);
-            var i0 = LowerBound(t1, date + SessionClock.EntryStartUtc);
-            var i1 = LowerBound(t1, date + SessionClock.EntryEndUtc);
+            var dayEnd = LowerBound(t1, date.AddDays(1));
+            // Same window as the live SignalWorker: SignalOpen..SignalClose IST, both ends inclusive.
+            var i0 = LowerBound(t1, date + SessionClock.SignalStartUtc);
+            var i1 = UpperBound(t1, date + SessionClock.SignalEndUtc);
+
+            // BreakoutProtectionService (StrategyManager, every signal path, no setting): replayed once per session with the
+            // live state machine. Index n-1 is the decision after the first n of today's bars have closed.
+            var session = new Candle[dayEnd - dayStart];
+            for (var q = dayStart; q < dayEnd; q++)
+                session[q - dayStart] = ToCandle(symbol, b1[q]);
+            var breakoutCall = BreakoutProtectionService.ReplaySession(session, isCall: true);
+            var breakoutPut = BreakoutProtectionService.ReplaySession(session, isCall: false);
 
             for (var i = i0; i < i1; i++)
             {
                 var point = At(symbol, t1[i], b1, t1, c1, b5, t5, c5, dayStart, gapNeutralRsi5);
-                if (point is not null)
-                    points.Add(point);
+                if (point is null)
+                    continue;
+
+                var closedToday = point.NextBarIndex - dayStart;
+                points.Add(closedToday > 0
+                    ? point with { BreakoutCall = breakoutCall[closedToday - 1], BreakoutPut = breakoutPut[closedToday - 1] }
+                    : point with { BreakoutCall = WaitingForCandles, BreakoutPut = WaitingForCandles });
             }
         }
         return points;
@@ -84,10 +102,6 @@ public static class MarketSeriesBuilder
 
         // 5m bars closed at nowUtc: open <= now - 5 minutes
         var k = UpperBound(t5, nowUtc - TimeSpan.FromMinutes(5));
-        Console.WriteLine(
-    $"RSI5 DEBUG | {symbol} | {nowUtc:yyyy-MM-dd HH:mm} UTC | " +
-    $"k={k} | First5m={t5.FirstOrDefault():yyyy-MM-dd HH:mm} | " +
-    $"LastClosed5m={(k > 0 ? t5[k - 1].ToString("yyyy-MM-dd HH:mm") : "NONE")}");
         double? rsi5 = null;
         double e20_5 = 0, e50_5 = 0;
         double atr5 = 0;
@@ -99,9 +113,6 @@ public static class MarketSeriesBuilder
             e50_5 = IndicatorMath.Ema(w5, 50);
             atr5 = IndicatorMath.Atr(b5.AsSpan(Math.Max(0, k - Window5m), k - Math.Max(0, k - Window5m)));
         }
-        Console.WriteLine(
-    $"RSI5 RESULT | {symbol} | {nowUtc:yyyy-MM-dd HH:mm} UTC | " +
-    $"Rsi5m={rsi5?.ToString("F2") ?? "NULL"}");
 
         return new MarketPoint
         {
@@ -132,7 +143,35 @@ public static class MarketSeriesBuilder
             MinLow10 = MinLow(b1, Math.Max(0, j - 10), j),
             MaxHigh10Prior = MaxHigh(b1, Math.Max(0, j - 11), j - 1),
             OpenGapPct = dayStart > 0 && c1[dayStart - 1] > 0 ? (b1[dayStart].Open - c1[dayStart - 1]) / c1[dayStart - 1] * 100.0 : null,
+            PrevClose = dayStart > 0 && c1[dayStart - 1] > 0 ? c1[dayStart - 1] : null,
+            SessionHigh = MaxHigh(b1, dayStart, j),
+            // live: todayCandles5m[^1] - the last CLOSED 5m bar of today (null before 09:20 IST)
+            LastClosed5mToday = k > 0 && b5[k - 1].OpenUtc.Date == nowUtc.Date ? b5[k - 1] : null,
+            Chop15 = Chop(symbol, b1, j),
         };
+    }
+
+    private static readonly BreakoutDecision WaitingForCandles = BreakoutDecision.Block("Waiting for session candles");
+
+    internal static Candle ToCandle(string symbol, Bar b) => new()
+    {
+        Symbol = symbol,
+        CandleTime = b.OpenUtc,
+        Open = (decimal)b.Open,
+        High = (decimal)b.High,
+        Low = (decimal)b.Low,
+        Close = (decimal)b.Close,
+    };
+
+    /// <summary>ChopGate.Chop over the last 15 closed 1m bars of the rolling window (crosses days, as live Candles1m does).</summary>
+    private static double? Chop(string symbol, Bar[] b1, int closedCount)
+    {
+        if (closedCount < ChopGate.Bars)
+            return null;
+        var last = new Candle[ChopGate.Bars];
+        for (var q = 0; q < ChopGate.Bars; q++)
+            last[q] = ToCandle(symbol, b1[closedCount - ChopGate.Bars + q]);
+        return ChopGate.Chop(last) is { } c ? (double)c : null;
     }
 
     /// <summary>

@@ -58,6 +58,9 @@ public sealed record EntryRules
     public decimal? GapTrendPutRsiFloor { get; init; }
     public bool GapTrendSkipsSidewaysSuppression { get; init; }
     public bool GapTrendSkipsEarlyTrendGate { get; init; }
+
+    /// <summary>Research only: skip the replayed BreakoutProtectionService even when StrategySettings.EnableBreakoutProtection is on.</summary>
+    public bool SkipBreakoutProtection { get; init; }
     public bool GapTrendWaivesEmaGapFilter { get; init; }
 
     // ── the proposed gap-up continuation entry (CALL, only while the gap trend is active) ──────────────────────────
@@ -294,11 +297,19 @@ public sealed class EntryEvaluator
     private readonly SignalEngineService? _gapEngine;
     private readonly SignalEngineService? _openingBandEngine;
     private readonly RatedDirectionScorer _rated;
+    private readonly TradingMode? _tradingMode;
+    private readonly FiveMinuteConfirmationService _fiveMinute = new();
 
+    /// <param name="tradingMode">
+    /// The live trading mode whose trigger candle is replayed (StrategyManager.UseOneMinuteTrigger: Paper defaults to the last
+    /// closed 5m bar, Live/HeroZero to the last closed 1m bar, UseOneMinuteEntryCandle overrides). Null = always the 1m bar
+    /// (the replay's behaviour before live parity; kept for hand-built test points).
+    /// </param>
     public EntryEvaluator(BacktestSettings settings, TradingSettings trading, IReadOnlyList<TradingInstrument> instruments,
-        SelectorMode selectorMode = SelectorMode.Ignore, EntryRules? rules = null)
+        SelectorMode selectorMode = SelectorMode.Ignore, EntryRules? rules = null, TradingMode? tradingMode = null)
     {
         _settings = settings;
+        _tradingMode = tradingMode;
         _trading = trading;
         _selectorMode = selectorMode;
         _rules = rules ?? new EntryRules();
@@ -736,7 +747,7 @@ public sealed class EntryEvaluator
             return EvaluateTrend(p, trend);
 
         // ── the real CALL / PUT AND-chain ────────────────────────────────────────────────────────────────────────────
-        var inputs = ToInputs(p);
+        var inputs = ToInputs(p, UseOneMinuteTrigger(symbol));
         var gapTrend = IsGapTrend(p, side);
         var engine = gapTrend && _gapEngine is not null ? _gapEngine : _engine;
 
@@ -801,6 +812,20 @@ public sealed class EntryEvaluator
             }
         }
 
+        // ── live StrategyManager, after the approved-rule fallback: BreakoutProtection, then the 5m confirmation ──────────
+        if (!_rules.SkipBreakoutProtection
+            && _settings.GetBool(BreakoutProtectionService.EnableKey, symbol, false)
+            && (side == TradeSide.Call ? p.BreakoutCall : p.BreakoutPut) is { Allowed: false } breakout)
+            return EntryVerdict.GateBlock("BreakoutProtection", breakout.Reason, path);
+
+        if (_settings.GetBool(FiveMinuteConfirmationService.EnabledSettingKey, symbol, false))
+        {
+            var confirmation = _fiveMinute.Confirm(side == TradeSide.Call, (decimal)p.Ema20_5m, (decimal)p.Ema50_5m,
+                p.Rsi5m is { } r5 ? (decimal)r5 : null, _trading);
+            if (!confirmation.Passed)
+                return EntryVerdict.GateBlock("FiveMinuteConfirmation", $"BLOCKED_BY_5M_CONFIRMATION — {confirmation.Reason}", path);
+        }
+
         // ── gap-up mode: counter-trend PUTs, then the CALL entry confirmation ───────────────────────────────────────────
         if (side == TradeSide.Put && _rules.GapUpBlocksPut != CounterTrendPut.Allow && IsGapUpMode(p)
             && (_rules.GapUpBlocksPut == CounterTrendPut.BlockChainAndRule || path == "AND_CHAIN"))
@@ -840,6 +865,12 @@ public sealed class EntryEvaluator
                 return EntryVerdict.GateBlock("EarlyTrendGate", reason, path);
         }
 
+        if (LivePostGateBlock(p, signalType) is { } post)
+            return EntryVerdict.GateBlock(post.By, post.Reason, path);
+
+        // NOTE: NoTradeWindowGate is NOT registered in the live SignalWorker.PostGates array, so production ignores
+        // EnableNoTradeWindowGate. It is kept here because the existing research configurations rely on it; Program warns
+        // when the setting is on so a parity run is not silently stricter than production.
         if (_settings.GetBool(NoTradeWindowGate.EnableKey, symbol, false))
         {
             var sideSetting = _settings.GetInt(NoTradeWindowGate.SideKey, symbol, NoTradeWindowGate.SideBoth);
@@ -856,27 +887,94 @@ public sealed class EntryEvaluator
         return EntryVerdict.Pass(path);
     }
 
-    /// <summary>Builds the live engine's input record from the rebuilt point (delta/OI/volume/VWAP are not part of the active rules).</summary>
-    internal static SignalEngineService.EntryMarketInputs ToInputs(MarketPoint p) => new(
-        Ltp: (decimal)p.Ltp, Ema20: (decimal)p.Ema20, Ema50: (decimal)p.Ema50,
-        Rsi: (decimal)p.Rsi1m, Rsi5m: p.Rsi5m is { } r ? (decimal)r : null,
-        Pcr: (decimal)(p.Pcr ?? 0), AtrPct: (decimal)p.AtrPct, PriceChangePct: (decimal)p.DayChangePct,
-        CurrentVolume: 0, AvgVolume20: 0, Vwap: 0, Prev5mHigh: (decimal)p.Prev5mHigh, Prev5mLow: (decimal)p.Prev5mLow,
-        DayOpen: (decimal)p.DayOpen, DayLow: (decimal)p.DayLow, DayHigh: (decimal)p.DayHigh, DayChangePct: (decimal)p.DayChangePct,
-        // Recovered exactly from the gap the series already carries: OpenGapPct was computed as
-        // (SessionOpen - prevClose) / prevClose * 100. 0 when the first session has no previous close,
-        // which disables the opening-conditional RSI band for that session.
-        YesterdayClose: p.OpenGapPct is { } g && Math.Abs(1 + g / 100.0) > 1e-9
-            ? (decimal)(p.SessionOpen / (1 + g / 100.0))
-            : 0m,
-        CeAtmDelta: 0, PeAtmDelta: 0, CeChangeInOi: 0, PeChangeInOi: 0,
-        TrendBullish: p.Ema20_5m > 0 && p.Ema50_5m > 0 && p.Ema20_5m > p.Ema50_5m,
-        TrendBearish: p.Ema20_5m > 0 && p.Ema50_5m > 0 && p.Ema20_5m < p.Ema50_5m,
-        LastClosedCandle: new Candle
+    /// <summary>
+    /// Builds the live engine's input record from the rebuilt point (delta/OI/volume/VWAP are not part of the active rules).
+    /// Live parity (MarketSnapshotBuilder): DayOpen/DayLow/DayHigh are the SESSION values (the tick's session open/low/high),
+    /// not the drifting first bar of the 200-bar window; DayChangePct is measured from the previous session's close;
+    /// PriceChangePct keeps the drifting window open exactly as production stores it. Points built by hand (tests) that do not
+    /// carry the session fields fall back to the old per-point values.
+    /// </summary>
+    internal static SignalEngineService.EntryMarketInputs ToInputs(MarketPoint p, bool oneMinuteTrigger = true)
+    {
+        var dayOpen = p.SessionOpen > 0 ? p.SessionOpen : p.DayOpen;
+        var dayLow = p.SessionLow > 0 && p.SessionLow < double.MaxValue ? p.SessionLow : p.DayLow;
+        var dayHigh = p.SessionHigh > 0 ? p.SessionHigh : p.DayHigh;
+        var dayChangePct = p.PrevClose is { } pc && pc > 0 ? (p.Ltp - pc) / pc * 100.0 : p.DayChangePct;
+        var yesterdayClose = p.PrevClose is { } prev && prev > 0
+            ? (decimal)prev
+            // Recovered exactly from the gap the series already carries: OpenGapPct was computed as
+            // (SessionOpen - prevClose) / prevClose * 100. 0 when the first session has no previous close,
+            // which disables the opening-conditional RSI band for that session.
+            : p.OpenGapPct is { } g && Math.Abs(1 + g / 100.0) > 1e-9
+                ? (decimal)(p.SessionOpen / (1 + g / 100.0))
+                : 0m;
+
+        // live StrategyManager.ResolveTriggerCandle: the last closed 1m bar, or today's last closed 5m bar (null before one closes)
+        var trigger = oneMinuteTrigger ? p.LastClosedBar : p.LastClosed5mToday;
+
+        return new(
+            Ltp: (decimal)p.Ltp, Ema20: (decimal)p.Ema20, Ema50: (decimal)p.Ema50,
+            Rsi: (decimal)p.Rsi1m, Rsi5m: p.Rsi5m is { } r ? (decimal)r : null,
+            Pcr: (decimal)(p.Pcr ?? 0), AtrPct: (decimal)p.AtrPct, PriceChangePct: (decimal)p.DayChangePct,
+            CurrentVolume: 0, AvgVolume20: 0, Vwap: 0, Prev5mHigh: (decimal)p.Prev5mHigh, Prev5mLow: (decimal)p.Prev5mLow,
+            DayOpen: (decimal)dayOpen, DayLow: (decimal)dayLow, DayHigh: (decimal)dayHigh, DayChangePct: (decimal)dayChangePct,
+            YesterdayClose: yesterdayClose,
+            CeAtmDelta: 0, PeAtmDelta: 0, CeChangeInOi: 0, PeChangeInOi: 0,
+            TrendBullish: p.Ema20_5m > 0 && p.Ema50_5m > 0 && p.Ema20_5m > p.Ema50_5m,
+            TrendBearish: p.Ema20_5m > 0 && p.Ema50_5m > 0 && p.Ema20_5m < p.Ema50_5m,
+            LastClosedCandle: trigger is { } b
+                ? new Candle
+                {
+                    Symbol = p.Symbol, Open = (decimal)b.Open, High = (decimal)b.High,
+                    Low = (decimal)b.Low, Close = (decimal)b.Close, CandleTime = b.OpenUtc,
+                }
+                : null);
+    }
+
+    /// <summary>Live StrategyManager.UseOneMinuteTrigger for the replayed mode; no mode = the 1m bar.</summary>
+    private bool UseOneMinuteTrigger(string symbol) =>
+        _tradingMode is not { } mode || global::Trading.Worker.StrategyManager.UseOneMinuteTrigger(mode, _settings, symbol);
+
+    /// <summary>
+    /// The live post-gates that are pure functions of the point, in SignalWorker.PostGates order after EarlyTrendGate:
+    /// ChopGate, FastEmaGate, SessionTrendGate. Each reads the same settings rows and calls the gate's own Evaluate.
+    /// VwapSideGate is a no-op in production (index VWAP is always null). CrossIndexAgreementGate, MarketDirectionGate,
+    /// PutS1Gate and StaleEntryGate need data the replay does not carry; Program warns when they are enabled.
+    /// </summary>
+    private (string By, string Reason)? LivePostGateBlock(MarketPoint p, string signalType)
+    {
+        var symbol = p.Symbol;
+        var dayOpen = (decimal)(p.SessionOpen > 0 ? p.SessionOpen : p.DayOpen);
+        var yesterdayClose = p.PrevClose is { } pc ? (decimal)pc : 0m;
+
+        if (_settings.GetBool(ChopGate.EnableKey, symbol, false) && p.Chop15 is { } chop && (decimal)chop > ChopGate.MaxChop)
+            return ("ChopGate", $"Chop gate: 15-bar chop {chop:F2} > {ChopGate.MaxChop} ({symbol})");
+
+        if (_settings.GetBool(FastEmaGate.EnableKey, symbol, false)
+            && !(_settings.GetBool(FastEmaGate.GapUpOnlyKey, symbol, true)
+                 && !FastEmaGate.OpenedGapUp(dayOpen, yesterdayClose, _settings.GetDecimal(FastEmaGate.GapPctKey, symbol, 0.30m)))
+            && FastEmaGate.Evaluate(signalType, (decimal)p.Ema9, (decimal)p.Ema21,
+                   _settings.GetInt(FastEmaGate.SideKey, symbol, FastEmaGate.SideCallOnly)) is { } fast)
+            return ("FastEmaGate", $"{fast} ({symbol})");
+
+        if (_settings.GetBool(SessionTrendGate.EnableKey, symbol, false))
         {
-            Symbol = p.Symbol, Open = (decimal)p.LastClosedBar.Open, High = (decimal)p.LastClosedBar.High,
-            Low = (decimal)p.LastClosedBar.Low, Close = (decimal)p.LastClosedBar.Close, CandleTime = p.LastClosedBar.OpenUtc,
-        });
+            var dayLow = (decimal)(p.SessionLow > 0 && p.SessionLow < double.MaxValue ? p.SessionLow : p.DayLow);
+            var dayHigh = (decimal)(p.SessionHigh > 0 ? p.SessionHigh : p.DayHigh);
+            var reason = SessionTrendGate.Evaluate(
+                signalType, (decimal)p.Ltp, dayOpen, dayHigh, dayLow, (decimal)p.Atr, yesterdayClose,
+                minMoveAtr: _settings.GetDecimal(SessionTrendGate.MinMoveKey, symbol, 0.75m),
+                minEfficiency: _settings.GetDecimal(SessionTrendGate.MinEfficiencyKey, symbol, 0.50m),
+                nearExtremeAtr: _settings.GetDecimal(SessionTrendGate.NearExtremeKey, symbol, 0m),
+                opening: _settings.GetInt(SessionTrendGate.OpeningKey, symbol, SessionTrendGate.OpeningAny),
+                gapPct: _settings.GetDecimal(SessionTrendGate.GapPctKey, symbol, 0.30m),
+                side: _settings.GetInt(SessionTrendGate.SideKey, symbol, SessionTrendGate.SideBoth));
+            if (reason is not null)
+                return ("SessionTrendGate", $"{reason} ({symbol})");
+        }
+
+        return null;
+    }
 
     /// <summary>The row the live rule reads (StrategyManager.BuildRuleSnapshot); MarketState / TrendDirection come from the stored snapshot only.</summary>
     internal static IndicatorSnapshot ToRuleSnapshot(MarketPoint p) => new()
