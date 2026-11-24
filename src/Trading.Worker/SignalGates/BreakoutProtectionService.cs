@@ -10,29 +10,18 @@ namespace Trading.Worker.SignalGates
 {
     public sealed class BreakoutProtectionService
     {
-        /// <summary>
-        /// StrategySettings flag (per symbol, then global). The check runs only when this row is on; with no row it is OFF,
-        /// so it is switched on and off from the database like every other filter. The backtest reads the same key.
-        /// </summary>
         internal const string EnableKey = "EnableBreakoutProtection";
 
-        // All values are in index/futures points, not option premium.
+        // All values are index/futures points.
         private const decimal BreakoutBuffer = 5m;
         private const decimal PullbackBuffer = 5m;
 
         private readonly ConcurrentDictionary<string, SymbolState> _states = new();
 
-        /// <summary>
-        /// Call on every market cycle, even when no trading signal exists.
-        /// Processes both CALL and PUT candle states.
-        /// </summary>
-        public void Update(
-            string symbol,
-            IReadOnlyList<Candle>? candles)
+        public void Update(string symbol, IReadOnlyList<Candle>? candles)
         {
             if (string.IsNullOrWhiteSpace(symbol) ||
-                candles == null ||
-                candles.Count == 0)
+                candles == null || candles.Count == 0)
                 return;
 
             var sessionStartUtc = TradingConstants.TodayUtcStart();
@@ -40,16 +29,13 @@ namespace Trading.Worker.SignalGates
             var todayCandles = candles
                 .Where(c =>
                     c.CandleTime >= sessionStartUtc &&
-                    c.High > 0 &&
-                    c.Low > 0 &&
-                    c.Close > 0)
+                    c.High > 0 && c.Low > 0 && c.Close > 0)
                 .OrderBy(c => c.CandleTime)
                 .ToList();
 
             if (todayCandles.Count == 0)
                 return;
 
-            // Update both directions on every cycle.
             ProcessCandles(
                 GetState(symbol, true, sessionStartUtc),
                 todayCandles,
@@ -63,10 +49,6 @@ namespace Trading.Worker.SignalGates
                 sessionStartUtc);
         }
 
-        /// <summary>
-        /// Returns the latest decision for the requested direction.
-        /// Update() should also be called on every market cycle.
-        /// </summary>
         public BreakoutDecision Evaluate(
             string symbol,
             bool isCall,
@@ -81,24 +63,17 @@ namespace Trading.Worker.SignalGates
 
             var sessionStartUtc = TradingConstants.TodayUtcStart();
 
-            // Safe even if Update() was not separately called.
             Update(symbol, candles);
 
             var state = GetState(symbol, isCall, sessionStartUtc);
 
             lock (state)
-            {
                 return state.LastDecision;
-            }
         }
 
-        /// <summary>
-        /// Backtest replay only (Trading.Backtest). Runs the SAME state machine and buffers as <see cref="Evaluate"/> over one
-        /// session's closed 1m candles, in time order, on a fresh state that is not stored in the live per-symbol cache.
-        /// result[i] is the decision the live service holds after candles[0..i] have been processed. Not called by the
-        /// live pipeline; it changes no live behaviour.
-        /// </summary>
-        internal static BreakoutDecision[] ReplaySession(IReadOnlyList<Candle> sessionCandles, bool isCall)
+        internal static BreakoutDecision[] ReplaySession(
+            IReadOnlyList<Candle> sessionCandles,
+            bool isCall)
         {
             var state = new SymbolState();
             state.Reset(default);
@@ -109,6 +84,7 @@ namespace Trading.Worker.SignalGates
             for (var i = 0; i < sessionCandles.Count; i++)
             {
                 one[0] = sessionCandles[i];
+
                 ProcessCandles(state, one, isCall, default);
                 result[i] = state.LastDecision;
             }
@@ -124,15 +100,12 @@ namespace Trading.Worker.SignalGates
             var key = $"{symbol}_{(isCall ? "CALL" : "PUT")}";
 
             var state = _states.GetOrAdd(
-                key,
-                _ => new SymbolState());
+                key, _ => new SymbolState());
 
             lock (state)
             {
                 if (state.SessionStartUtc != sessionStartUtc)
-                {
                     state.Reset(sessionStartUtc);
-                }
             }
 
             return state;
@@ -154,47 +127,38 @@ namespace Trading.Worker.SignalGates
                     if (candle.CandleTime == default ||
                         candle.High <= 0 ||
                         candle.Low <= 0 ||
-                        candle.Close <= 0)
+                        candle.Close <= 0 ||
+                        candle.High < candle.Low)
                         continue;
 
-                    // Process each closed candle exactly once.
                     if (candle.CandleTime <= state.LastProcessedCandleTime)
                         continue;
 
                     if (!state.Initialized)
                     {
-                        // First available candle establishes the initial
-                        // session high/low. It is not treated as a breakout.
                         state.CandleDayHigh = candle.High;
                         state.CandleDayLow = candle.Low;
                         state.Initialized = true;
                         state.LastProcessedCandleTime = candle.CandleTime;
 
                         state.LastDecision = BreakoutDecision.Block(
-                            "Initializing candle-based session high/low");
+                            "Initializing session high/low");
 
                         continue;
                     }
 
-                    // IMPORTANT:
-                    // Capture previous session extremes BEFORE updating
-                    // them with the current candle.
                     var previousDayHigh = state.CandleDayHigh;
                     var previousDayLow = state.CandleDayLow;
 
-                    // Evaluate current candle against previous extremes.
                     state.LastDecision = isCall
                         ? EvaluateCall(state, candle, previousDayHigh)
                         : EvaluatePut(state, candle, previousDayLow);
 
-                    // Update today's running extremes AFTER evaluation.
                     state.CandleDayHigh = Math.Max(
-                        state.CandleDayHigh,
-                        candle.High);
+                        state.CandleDayHigh, candle.High);
 
                     state.CandleDayLow = Math.Min(
-                        state.CandleDayLow,
-                        candle.Low);
+                        state.CandleDayLow, candle.Low);
 
                     state.LastProcessedCandleTime = candle.CandleTime;
                 }
@@ -206,38 +170,38 @@ namespace Trading.Worker.SignalGates
             Candle candle,
             decimal previousDayHigh)
         {
+            // A fresh higher breakout can replace an older setup.
+            var freshBreakout =
+                candle.High > previousDayHigh + BreakoutBuffer;
+
             switch (state.Phase)
             {
                 case BreakoutPhase.WaitingForBreakout:
                 case BreakoutPhase.Failed:
 
-                    // A fresh breakout must exceed the previous
-                    // running session high.
-                    if (candle.Close > previousDayHigh + BreakoutBuffer)
+                    if (freshBreakout &&
+                        candle.Close > previousDayHigh + BreakoutBuffer)
                     {
-                        state.Phase = BreakoutPhase.PullbackTracking;
-                        state.BreakoutLevel = previousDayHigh;
-                        state.PullbackLow = candle.Low;
-                        state.PullbackHigh = 0m;
+                        StartCallSetup(state, previousDayHigh, candle);
 
                         return BreakoutDecision.Block(
-                            $"CALL breakout detected above day high " +
-                            $"{previousDayHigh:F2}; waiting for pullback");
+                            $"CALL breakout confirmed; level={previousDayHigh:F2}; waiting for pullback");
                     }
 
                     return BreakoutDecision.Block(
-                        $"CALL waiting for day-high breakout. " +
-                        $"Candle day high={previousDayHigh:F2}");
+                        freshBreakout
+                            ? "CALL breakout wick detected; waiting for close confirmation"
+                            : $"CALL waiting for day-high breakout. High={previousDayHigh:F2}");
 
                 case BreakoutPhase.PullbackTracking:
 
-                    if (candle.Close > previousDayHigh + BreakoutBuffer)
+                    if (freshBreakout &&
+                        candle.Close > previousDayHigh + BreakoutBuffer)
                     {
-                        state.BreakoutLevel = previousDayHigh;
-                        state.PullbackLow = candle.Low;
-                        state.PullbackHigh = 0m;
+                        StartCallSetup(state, previousDayHigh, candle);
+
                         return BreakoutDecision.Block(
-                            $"CALL new breakout above day high {previousDayHigh:F2}; level moved, waiting for pullback");
+                            $"CALL fresh higher breakout; tracking new level={previousDayHigh:F2}");
                     }
 
                     if (candle.Close <
@@ -246,20 +210,16 @@ namespace Trading.Worker.SignalGates
                         state.Phase = BreakoutPhase.Failed;
 
                         return BreakoutDecision.Block(
-                            "CALL failed breakout: closed below breakout level");
+                            "CALL failed breakout: closed below protected level");
                     }
 
                     state.PullbackLow = Math.Min(
-                        state.PullbackLow,
-                        candle.Low);
+                        state.PullbackLow, candle.Low);
 
-                    // Price must return near the breakout level.
                     if (candle.Low <=
                         state.BreakoutLevel + PullbackBuffer)
                     {
                         state.Phase = BreakoutPhase.WaitingForContinuation;
-
-                        // Start tracking the pullback swing high.
                         state.PullbackHigh = candle.High;
 
                         return BreakoutDecision.Block(
@@ -267,9 +227,18 @@ namespace Trading.Worker.SignalGates
                     }
 
                     return BreakoutDecision.Block(
-                        "CALL breakout detected; waiting for pullback");
+                        "CALL waiting for pullback");
 
                 case BreakoutPhase.WaitingForContinuation:
+
+                    if (freshBreakout &&
+                        candle.Close > previousDayHigh + BreakoutBuffer)
+                    {
+                        StartCallSetup(state, previousDayHigh, candle);
+
+                        return BreakoutDecision.Block(
+                            $"CALL fresh higher breakout; tracking new level={previousDayHigh:F2}");
+                    }
 
                     if (candle.Close <
                         state.BreakoutLevel - PullbackBuffer)
@@ -280,8 +249,7 @@ namespace Trading.Worker.SignalGates
                             "CALL retest failed below breakout level");
                     }
 
-                    // Check continuation against the PREVIOUS swing high
-                    // before updating it with the current candle.
+                    // Compare with the previous pullback swing high.
                     if (candle.Close > state.PullbackHigh &&
                         candle.Close > state.BreakoutLevel)
                     {
@@ -291,19 +259,26 @@ namespace Trading.Worker.SignalGates
                             "CALL breakout, pullback and continuation confirmed");
                     }
 
-                    // No continuation yet: update swing for next candle.
                     state.PullbackHigh = Math.Max(
-                        state.PullbackHigh,
-                        candle.High);
+                        state.PullbackHigh, candle.High);
 
                     state.PullbackLow = Math.Min(
-                        state.PullbackLow,
-                        candle.Low);
+                        state.PullbackLow, candle.Low);
 
                     return BreakoutDecision.Block(
                         "CALL waiting for close above pullback high");
 
                 case BreakoutPhase.ContinuationConfirmed:
+
+                    if (freshBreakout &&
+                        candle.Close > previousDayHigh + BreakoutBuffer)
+                    {
+                        // A new leg starts a fresh confirmation cycle.
+                        StartCallSetup(state, previousDayHigh, candle);
+
+                        return BreakoutDecision.Block(
+                            $"CALL new breakout leg; tracking level={previousDayHigh:F2}");
+                    }
 
                     if (candle.Close <
                         state.BreakoutLevel - PullbackBuffer)
@@ -328,38 +303,37 @@ namespace Trading.Worker.SignalGates
             Candle candle,
             decimal previousDayLow)
         {
+            var freshBreakdown =
+                candle.Low < previousDayLow - BreakoutBuffer;
+
             switch (state.Phase)
             {
                 case BreakoutPhase.WaitingForBreakout:
                 case BreakoutPhase.Failed:
 
-                    // A fresh breakdown must go below the previous
-                    // running session low.
-                    if (candle.Close < previousDayLow - BreakoutBuffer)
+                    if (freshBreakdown &&
+                        candle.Close < previousDayLow - BreakoutBuffer)
                     {
-                        state.Phase = BreakoutPhase.PullbackTracking;
-                        state.BreakoutLevel = previousDayLow;
-                        state.PullbackHigh = candle.High;
-                        state.PullbackLow = 0m;
+                        StartPutSetup(state, previousDayLow, candle);
 
                         return BreakoutDecision.Block(
-                            $"PUT breakdown detected below day low " +
-                            $"{previousDayLow:F2}; waiting for pullback");
+                            $"PUT breakdown confirmed; level={previousDayLow:F2}; waiting for pullback");
                     }
 
                     return BreakoutDecision.Block(
-                        $"PUT waiting for day-low breakdown. " +
-                        $"Candle day low={previousDayLow:F2}");
+                        freshBreakdown
+                            ? "PUT breakdown wick detected; waiting for close confirmation"
+                            : $"PUT waiting for day-low breakdown. Low={previousDayLow:F2}");
 
                 case BreakoutPhase.PullbackTracking:
 
-                    if (candle.Close < previousDayLow - BreakoutBuffer)
+                    if (freshBreakdown &&
+                        candle.Close < previousDayLow - BreakoutBuffer)
                     {
-                        state.BreakoutLevel = previousDayLow;
-                        state.PullbackHigh = candle.High;
-                        state.PullbackLow = 0m;
+                        StartPutSetup(state, previousDayLow, candle);
+
                         return BreakoutDecision.Block(
-                            $"PUT new breakdown below day low {previousDayLow:F2}; level moved, waiting for pullback");
+                            $"PUT fresh lower breakdown; tracking new level={previousDayLow:F2}");
                     }
 
                     if (candle.Close >
@@ -368,20 +342,16 @@ namespace Trading.Worker.SignalGates
                         state.Phase = BreakoutPhase.Failed;
 
                         return BreakoutDecision.Block(
-                            "PUT failed breakdown: closed above breakdown level");
+                            "PUT failed breakdown: closed above protected level");
                     }
 
                     state.PullbackHigh = Math.Max(
-                        state.PullbackHigh,
-                        candle.High);
+                        state.PullbackHigh, candle.High);
 
-                    // Price must rebound near the breakdown level.
                     if (candle.High >=
                         state.BreakoutLevel - PullbackBuffer)
                     {
                         state.Phase = BreakoutPhase.WaitingForContinuation;
-
-                        // Start tracking the pullback swing low.
                         state.PullbackLow = candle.Low;
 
                         return BreakoutDecision.Block(
@@ -389,9 +359,18 @@ namespace Trading.Worker.SignalGates
                     }
 
                     return BreakoutDecision.Block(
-                        "PUT breakdown detected; waiting for pullback");
+                        "PUT waiting for pullback");
 
                 case BreakoutPhase.WaitingForContinuation:
+
+                    if (freshBreakdown &&
+                        candle.Close < previousDayLow - BreakoutBuffer)
+                    {
+                        StartPutSetup(state, previousDayLow, candle);
+
+                        return BreakoutDecision.Block(
+                            $"PUT fresh lower breakdown; tracking new level={previousDayLow:F2}");
+                    }
 
                     if (candle.Close >
                         state.BreakoutLevel + PullbackBuffer)
@@ -402,8 +381,7 @@ namespace Trading.Worker.SignalGates
                             "PUT retest failed above breakdown level");
                     }
 
-                    // Check continuation against the PREVIOUS swing low
-                    // before updating it with the current candle.
+                    // Compare with the previous pullback swing low.
                     if (candle.Close < state.PullbackLow &&
                         candle.Close < state.BreakoutLevel)
                     {
@@ -413,19 +391,25 @@ namespace Trading.Worker.SignalGates
                             "PUT breakdown, pullback and continuation confirmed");
                     }
 
-                    // No continuation yet: update swing for next candle.
                     state.PullbackLow = Math.Min(
-                        state.PullbackLow,
-                        candle.Low);
+                        state.PullbackLow, candle.Low);
 
                     state.PullbackHigh = Math.Max(
-                        state.PullbackHigh,
-                        candle.High);
+                        state.PullbackHigh, candle.High);
 
                     return BreakoutDecision.Block(
                         "PUT waiting for close below pullback low");
 
                 case BreakoutPhase.ContinuationConfirmed:
+
+                    if (freshBreakdown &&
+                        candle.Close < previousDayLow - BreakoutBuffer)
+                    {
+                        StartPutSetup(state, previousDayLow, candle);
+
+                        return BreakoutDecision.Block(
+                            $"PUT new breakdown leg; tracking level={previousDayLow:F2}");
+                    }
 
                     if (candle.Close >
                         state.BreakoutLevel + PullbackBuffer)
@@ -445,22 +429,38 @@ namespace Trading.Worker.SignalGates
             }
         }
 
+        private static void StartCallSetup(
+            SymbolState state,
+            decimal level,
+            Candle candle)
+        {
+            state.Phase = BreakoutPhase.PullbackTracking;
+            state.BreakoutLevel = level;
+            state.PullbackLow = candle.Low;
+            state.PullbackHigh = 0m;
+        }
+
+        private static void StartPutSetup(
+            SymbolState state,
+            decimal level,
+            Candle candle)
+        {
+            state.Phase = BreakoutPhase.PullbackTracking;
+            state.BreakoutLevel = level;
+            state.PullbackHigh = candle.High;
+            state.PullbackLow = decimal.MaxValue;
+        }
+
         private sealed class SymbolState
         {
             public DateTime SessionStartUtc { get; set; }
-
             public DateTime LastProcessedCandleTime { get; set; }
-
             public bool Initialized { get; set; }
 
             public decimal CandleDayHigh { get; set; }
-
             public decimal CandleDayLow { get; set; }
-
             public decimal BreakoutLevel { get; set; }
-
             public decimal PullbackHigh { get; set; }
-
             public decimal PullbackLow { get; set; }
 
             public BreakoutPhase Phase { get; set; } =
@@ -477,7 +477,6 @@ namespace Trading.Worker.SignalGates
 
                 CandleDayHigh = 0m;
                 CandleDayLow = 0m;
-
                 BreakoutLevel = 0m;
                 PullbackHigh = 0m;
                 PullbackLow = decimal.MaxValue;

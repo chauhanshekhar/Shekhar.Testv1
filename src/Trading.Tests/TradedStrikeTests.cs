@@ -28,7 +28,7 @@ public class TradedStrikeTests
     // ── SignalResultFactory (rule path) ─────────────────────────────────────────────────────
 
     [Fact]
-    public void Factory_IlliquidAtm_StoresTheTradedLegsStrike()
+    public void Factory_LowVolumeAtm_IsStillTraded_AndStoresTheTradedLegsStrike()
     {
         var systemSettings = new SystemSettingsService(new StaticOptionsMonitor<TradingSettings>(new TradingSettings()));
         var factory = new SignalResultFactory(
@@ -37,16 +37,16 @@ public class TradedStrikeTests
 
         var chain = new List<OptionChainData>
         {
-            Leg("NIFTYTEST20000CE", 20_000m, TradingConst.OptionType.CE, 1_000, 100m, 0.50m),     // ATM, below the volume floor
-            Leg("NIFTYTEST20050CE", 20_050m, TradingConst.OptionType.CE, 300_000, 80m, 0.45m),    // liquid neighbour
+            Leg("NIFTYTEST20000CE", 20_000m, TradingConst.OptionType.CE, 1_000, 100m, 0.50m),     // ATM: low volume no longer disqualifies it (liquidity filter removed)
+            Leg("NIFTYTEST20050CE", 20_050m, TradingConst.OptionType.CE, 300_000, 80m, 0.45m),    // neighbour: farther from ATM, so not chosen
         };
 
         var signal = factory.Build(Symbol, 20_000m, 30m, chain, 20_000m, TradingConst.OptionType.CE, 60m, call: true).Signal;
 
         Assert.NotNull(signal);
-        Assert.Equal("NIFTYTEST20050CE", signal!.OptionSymbol);
-        Assert.Equal(20_050m, signal.StrikePrice);
-        Assert.Equal(80m, signal.OptionLtp);
+        Assert.Equal("NIFTYTEST20000CE", signal!.OptionSymbol);
+        Assert.Equal(20_000m, signal.StrikePrice);
+        Assert.Equal(100m, signal.OptionLtp);
     }
 
     // ── Entry-leg lookup (placement DeltaAtEntry + blocked-signal audit) ────────────────────

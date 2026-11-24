@@ -18,6 +18,11 @@ namespace Trading.Backtest;
 
 internal static class Program
 {
+    // Rs20 per order + 1 point slippage per side (the real figures, confirmed 2026-10-15); override with --cost-per-order / --slippage-points.
+    private static CostModel RunCosts(Args o) => new(
+        double.Parse(o.Get("cost-per-order", "20"), CultureInfo.InvariantCulture),
+        double.Parse(o.Get("slippage-points", "1"), CultureInfo.InvariantCulture));
+
     private static async Task<int> Main(string[] args)
     {
         var o = Args.Parse(args);
@@ -367,7 +372,7 @@ internal static class Program
             // live stop ladder, real option prices where stored. Warm-up days before --from are not traded.
             var run = simulator.Run(
                 SignalParityReport.From(data, fromIst),
-                new SimulationOptions(TradeSide.Call, StopModel.Live, PremiumMode.OptionHistoryWhereAvailable, null, BothSides: true,
+                new SimulationOptions(TradeSide.Call, StopModel.Live, PremiumMode.OptionHistoryWhereAvailable, RunCosts(o), BothSides: true,
                     DayRisk: DayRiskLimits.From(trading, tradingMode)));
             SignalParityReport.WriteBacktestTrades(outDir, run.Trades, []);
 
@@ -375,7 +380,8 @@ internal static class Program
                 $"Backtest {fromIst:yyyy-MM-dd} onward, current settings" +
                 (overrides.Count == 0 ? "" : " + overrides") + $", BreakoutProtection {(skipBreakout ? "forced OFF" : "from StrategySettings")}: " +
                 $"{run.Trades.Count} trades ({run.Trades.Count(t => t.PnlRs > 0)} win / {run.Trades.Count(t => t.PnlRs <= 0)} loss), " +
-                $"gross P&L {run.Trades.Sum(t => t.PnlRs):+0.00;-0.00;0.00} Rs");
+                $"gross P&L {run.Trades.Sum(t => t.PnlRs):+0.00;-0.00;0.00} Rs, " +
+                $"costs {run.Trades.Sum(t => t.CostRs ?? 0):0.00} Rs, NET {run.Trades.Sum(t => t.PnlRs - (t.CostRs ?? 0)):+0.00;-0.00;0.00} Rs");
             Console.WriteLine($"Wrote {Path.Combine(outDir, "backtest-trades.xlsx")} and backtest-trades.csv");
             return 0;
         }
@@ -420,7 +426,7 @@ internal static class Program
             // both sides (OnePositionGate), same-side cooldown after a stop, live stop ladder, real option prices where stored.
             var cleanRun = paritySimulator.Run(
                 SignalParityReport.From(data, fromIst),
-                new SimulationOptions(TradeSide.Call, StopModel.Live, PremiumMode.OptionHistoryWhereAvailable, null, BothSides: true,
+                new SimulationOptions(TradeSide.Call, StopModel.Live, PremiumMode.OptionHistoryWhereAvailable, RunCosts(o), BothSides: true,
                     DayRisk: DayRiskLimits.From(trading, tradingMode)));
             SignalParityReport.WriteBacktestTrades(outDir, cleanRun.Trades, liveSignals);
             Console.WriteLine(
@@ -454,11 +460,7 @@ internal static class Program
                     ? SelectorMode.UseStoredSnapshot
                     : SelectorMode.Ignore,
 
-            o.Has("cost-per-order")
-                ? new CostModel(
-                    double.Parse(o.Get("cost-per-order", "0")),
-                    double.Parse(o.Get("slippage-points", "0")))
-                : null,
+            RunCosts(o), // costs are always on (Rs20/order + 1pt); pass --cost-per-order 0 --slippage-points 0 for gross
 
             int.Parse(o.Get("min-trades", "15")));
 
@@ -760,8 +762,20 @@ internal static class Program
                     yield return $"{symbol}: {key}=1 - {why}.";
             }
 
-            if (live.GetBool("EnableNoTradeWindowGate", symbol, false))
-                yield return $"{symbol}: EnableNoTradeWindowGate=1 - the replay applies NoTradeWindowGate, but SignalWorker.PostGates does NOT register it, so production ignores this row.";
+            foreach (var (key, gate) in new[]
+            {
+                ("EnableNoTradeWindowGate", nameof(Trading.Worker.SignalGates.NoTradeWindowGate)),
+                ("EnableChopGate", nameof(Trading.Worker.SignalGates.ChopGate)),
+                ("EnableFastEmaGate", nameof(Trading.Worker.SignalGates.FastEmaGate)),
+                ("EnableVwapSideGate", nameof(Trading.Worker.SignalGates.VwapSideGate)),
+                ("EnableSessionTrendGate", nameof(Trading.Worker.SignalGates.SessionTrendGate)),
+                ("EnableHandoffCooldownGate", nameof(Trading.Worker.SignalGates.HandoffCooldownGate)),
+                ("EnableEarlyTrendGate", nameof(Trading.Worker.SignalGates.EarlyTrendGate)),
+            })
+            {
+                if (live.GetBool(key, symbol, false) && !Trading.Backtest.Entry.LiveGates.Names.Contains(gate))
+                    yield return $"{symbol}: {key}=1 but {gate} is NOT in SignalWorker.PostGates - live ignores it, so the replay skips it too.";
+            }
 
             if (live.IsSettingActive("MinDirectionalConfidence", symbol))
                 yield return $"{symbol}: MinDirectionalConfidence is active - the confidence floor is not replayed.";

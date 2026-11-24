@@ -39,7 +39,7 @@ public static class SignalEngineTestFactory
             Symbol = Symbol,
         };
 
-    /// <summary>ATM CE/PE pair, liquid enough to pass IsLiquid for NIFTY's default TradingSettings
+    /// <summary>ATM CE/PE pair, priced for NIFTY's default TradingSettings
     /// (Volume>=200000, OI>=20000, Ltp in [20,300]) — strike computed from spot at the default
     /// 50-point interval (FakeInstrumentCache falls back to that via GetStrikeInterval).</summary>
     public static List<OptionChainData> BuildChain(decimal spot, long ceChangeInOi = 0, long peChangeInOi = 0)

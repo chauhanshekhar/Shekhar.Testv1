@@ -446,11 +446,10 @@ public class PutEntryGateTests
     // ── Traded strike ───────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void IlliquidAtmStrike_StoresTheTradedNeighboursStrike()
+    public void LowVolumeAtmStrike_IsStillTraded_AndStoresItsStrike()
     {
-        // 2026-10-05 signal 124: ATM 54400, but the liquid leg (and the one traded) was 54500PE -
-        // StrikePrice stored 54400. Here the ATM PE fails NIFTY's volume floor (200,000), so the
-        // neighbouring 20050 PE is the liquid leg; StrikePrice must say 20050, matching the symbol.
+        // The liquidity filter was removed: the ATM PE is traded even with low volume, and StrikePrice must
+        // match the traded symbol (the 2026-10-05 signal 124 stored-strike bug stays covered).
         var chain = SignalEngineTestFactory.BuildChain(Spot);
         chain.Single(o => o.OptionType == TradingConst.OptionType.PE).Volume = 1_000;
         chain.Add(new Trading.Domain.Entities.OptionChainData
@@ -463,9 +462,10 @@ public class PutEntryGateTests
         var signal = RunPut(optionChain: chain).Signal;
 
         Assert.NotNull(signal);
-        Assert.Equal("NIFTYTEST20050PE", signal!.OptionSymbol);
-        Assert.Equal(Spot + 50m, signal.StrikePrice);
-        Assert.Equal(110m, signal.OptionLtp);
+        var atmPe = chain.Single(o => o.OptionType == TradingConst.OptionType.PE && o.StrikePrice == Spot);
+        Assert.Equal(atmPe.TradingSymbol, signal!.OptionSymbol);
+        Assert.Equal(Spot, signal.StrikePrice);
+        Assert.Equal(atmPe.Ltp, signal.OptionLtp);
     }
 
     // ── 13: OI change floor

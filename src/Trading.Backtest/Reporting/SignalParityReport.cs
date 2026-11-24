@@ -223,7 +223,7 @@ public static class SignalParityReport
             liveBy.TryAdd((key.Item1, key.Item2, minute.AddMinutes(1)), s.Id);
         }
 
-        var lines = new List<string> { "Date,EntryIst,ExitIst,Symbol,Side,EntryPath,ExitReason,PremiumSource,EntryPremium,PnlRs,Result,LiveSignalId" };
+        var lines = new List<string> { "Date,EntryIst,ExitIst,Symbol,Side,EntryPath,ExitReason,PremiumSource,EntryPremium,PnlRs,CostRs,NetRs,Result,LiveSignalId" };
         foreach (var t in trades.OrderBy(t => t.EntryUtc))
         {
             var entryIst = t.EntryUtc + SessionClock.IstOffset;
@@ -231,12 +231,12 @@ public static class SignalParityReport
             liveBy.TryGetValue((t.Symbol.ToUpperInvariant(), side, entryIst), out var liveId);
             lines.Add($"{entryIst:yyyy-MM-dd},{entryIst:HH:mm},{t.ExitUtc + SessionClock.IstOffset:HH:mm},{t.Symbol},{side}," +
                       $"{t.EntryPath},{t.ExitReason},{t.Source},{t.EntryPremium.ToString("0.##", CultureInfo.InvariantCulture)}," +
-                      $"{Rs(t.PnlRs)},{(t.PnlRs > 0 ? "WIN" : "LOSS")},{(liveId > 0 ? liveId.ToString(CultureInfo.InvariantCulture) : "")}");
+                      $"{Rs(t.PnlRs)},{Rs(t.CostRs ?? 0)},{Rs(t.PnlRs - (t.CostRs ?? 0))},{(t.PnlRs > 0 ? "WIN" : "LOSS")},{(liveId > 0 ? liveId.ToString(CultureInfo.InvariantCulture) : "")}");
         }
 
         string Footer(string label, IReadOnlyList<Trade> set) =>
             $"{label},,,,,{set.Count} trades,{set.Count(x => x.PnlRs > 0)} win / {set.Count(x => x.PnlRs <= 0)} loss,,," +
-            $"{Rs(set.Sum(x => x.PnlRs))},,";
+            $"{Rs(set.Sum(x => x.PnlRs))},{Rs(set.Sum(x => x.CostRs ?? 0))},{Rs(set.Sum(x => x.PnlRs - (x.CostRs ?? 0)))},,";
 
         lines.Add("");
         foreach (var g in trades.GroupBy(t => t.TradeDate).OrderBy(g => g.Key))
@@ -250,7 +250,7 @@ public static class SignalParityReport
         // Same rows as a coloured workbook: blue header, green/red P&L per trade, yellow total rows.
         var sheet = new List<IReadOnlyList<XlsxCell>>
         {
-            new[] { "Date", "EntryIst", "ExitIst", "Symbol", "Side", "EntryPath", "ExitReason", "PremiumSource", "EntryPremium", "PnlRs", "Result", "LiveSignalId" }
+            new[] { "Date", "EntryIst", "ExitIst", "Symbol", "Side", "EntryPath", "ExitReason", "PremiumSource", "EntryPremium", "PnlRs", "CostRs", "NetRs", "Result", "LiveSignalId" }
                 .Select(h => new XlsxCell(h, XlsxStyle.Header)).ToList(),
         };
         var ordered = trades.OrderBy(t => t.EntryUtc).ToList();
@@ -260,12 +260,15 @@ public static class SignalParityReport
             var side = t.Side == TradeSide.Call ? "CALL" : "PUT";
             liveBy.TryGetValue((t.Symbol.ToUpperInvariant(), side, entryIst), out var liveId);
             var win = t.PnlRs > 0;
+            var net = Math.Round(t.PnlRs - (t.CostRs ?? 0), 2);
             sheet.Add(new XlsxCell[]
             {
                 new($"{entryIst:yyyy-MM-dd}"), new($"{entryIst:HH:mm}"), new($"{t.ExitUtc + SessionClock.IstOffset:HH:mm}"),
                 new(t.Symbol), new(side), new(t.EntryPath), new(t.ExitReason), new(t.Source.ToString()),
                 new(Math.Round(t.EntryPremium, 2), XlsxStyle.Decimal),
                 new(Math.Round(t.PnlRs, 2), win ? XlsxStyle.Win : XlsxStyle.Loss),
+                new(Math.Round(t.CostRs ?? 0, 2), XlsxStyle.Decimal),
+                new(net, net > 0 ? XlsxStyle.Win : XlsxStyle.Loss),
                 new(win ? "WIN" : "LOSS", win ? XlsxStyle.Win : XlsxStyle.Loss),
                 new(liveId > 0 ? (object)liveId : null),
             });
@@ -274,11 +277,15 @@ public static class SignalParityReport
         IReadOnlyList<XlsxCell> FooterRow(string label, IReadOnlyList<Trade> set)
         {
             var pnl = Math.Round(set.Sum(x => x.PnlRs), 2);
-            var cells = Enumerable.Repeat(new XlsxCell(null, XlsxStyle.FooterText), 12).ToArray();
+            var cells = Enumerable.Repeat(new XlsxCell(null, XlsxStyle.FooterText), 14).ToArray();
             cells[0] = new(label, XlsxStyle.FooterText);
             cells[4] = new($"{set.Count} trades", XlsxStyle.FooterText);
             cells[5] = new($"{set.Count(x => x.PnlRs > 0)} win / {set.Count(x => x.PnlRs <= 0)} loss", XlsxStyle.FooterText);
             cells[9] = new(pnl, pnl > 0 ? XlsxStyle.FooterWin : pnl < 0 ? XlsxStyle.FooterLoss : XlsxStyle.FooterNumber);
+            var cost = Math.Round(set.Sum(x => x.CostRs ?? 0), 2);
+            var netTotal = Math.Round(pnl - cost, 2);
+            cells[10] = new(cost, XlsxStyle.FooterNumber);
+            cells[11] = new(netTotal, netTotal > 0 ? XlsxStyle.FooterWin : netTotal < 0 ? XlsxStyle.FooterLoss : XlsxStyle.FooterNumber);
             return cells;
         }
 
@@ -291,7 +298,7 @@ public static class SignalParityReport
 
         SafeWrite(Path.Combine(outDir, "backtest-trades.xlsx"), path =>
             XlsxWriter.Write(path, "Backtest trades", sheet,
-                [12, 9, 9, 12, 7, 16, 22, 20, 13, 13, 8, 13], dataRowCount: ordered.Count));
+                [12, 9, 9, 12, 7, 16, 22, 20, 13, 13, 11, 13, 8, 13], dataRowCount: ordered.Count));
     }
 
     public static void Write(string outDir, IReadOnlyList<SignalParityRow> rows, string header)

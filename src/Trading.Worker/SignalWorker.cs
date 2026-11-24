@@ -34,8 +34,6 @@ public class SignalWorker : BackgroundService
         new KillSwitchGate(),
         new EventBlackoutGate(),
         new StaleDataGate(),
-       // new MaxDailyTradesGate(),
-        //new CircuitBreakerGate(),
          new ConsecutiveLossGate(),
         new OnePositionGate(),
         new AtrGate(),
@@ -44,7 +42,7 @@ public class SignalWorker : BackgroundService
 
     internal static readonly IPostSignalGate[] PostGates =
     [
-    new WhipsawShadowGate(),       // First: diagnostic only, never blocks
+    //new WhipsawShadowGate(),       // First: diagnostic only, never blocks
     new OiConfirmationGate(),
     new DuplicateSignalGate(),
     new RiskGate(),
@@ -53,13 +51,12 @@ public class SignalWorker : BackgroundService
     new EarlyTrendGate(),
     new NoTradeWindowGate(),       // EnableNoTradeWindowGate; same position as the backtest (after EarlyTrendGate)
     new ChopGate(),
-    new FastEmaGate(),
+    //new FastEmaGate(),
     new SessionTrendGate(),
     new CrossIndexAgreementGate(),
     new MarketDirectionGate(),
-    new VwapSideGate(),
+    //new VwapSideGate(),
     new HandoffCooldownGate(),
-    new PutS1Gate(),
     new RiskRewardGate(),
     new SpreadGate(),
     ];
