@@ -1,0 +1,36 @@
+BreakoutProtection: from StrategySettings.EnableBreakoutProtection (NIFTY=True, BANKNIFTY=True, SENSEX=True)
+NIFTY: lot size 65 (instrument is INACTIVE in TradingInstruments today)
+BANKNIFTY: lot size 30
+SENSEX: lot size 20
+Trading mode replayed for the trigger candle: Live (from SystemSettings.TradingMode)
+PARITY WARNING: NIFTY: EnableCrossIndexAgreementGate=1 - CrossIndexAgreementGate is live but not replayed (needs the other indices' bars at the second).
+PARITY WARNING: NIFTY: EnableStaleEntryGate=1 - StaleEntryGate is live but not replayed (needs feed lag; ideal data never trips it).
+PARITY WARNING: NIFTY: EnableNoTradeWindowGate=1 - the replay applies NoTradeWindowGate, but SignalWorker.PostGates does NOT register it, so production ignores this row.
+PARITY WARNING: NIFTY: ConsecutiveLossGate is on - replayed on the simulated trades (backtest-trades and grid), not on the per-minute signal-parity rows.
+PARITY WARNING: BANKNIFTY: EnableCrossIndexAgreementGate=1 - CrossIndexAgreementGate is live but not replayed (needs the other indices' bars at the second).
+PARITY WARNING: BANKNIFTY: EnableStaleEntryGate=1 - StaleEntryGate is live but not replayed (needs feed lag; ideal data never trips it).
+PARITY WARNING: BANKNIFTY: EnableNoTradeWindowGate=1 - the replay applies NoTradeWindowGate, but SignalWorker.PostGates does NOT register it, so production ignores this row.
+PARITY WARNING: BANKNIFTY: ConsecutiveLossGate is on - replayed on the simulated trades (backtest-trades and grid), not on the per-minute signal-parity rows.
+PARITY WARNING: SENSEX: EnableCrossIndexAgreementGate=1 - CrossIndexAgreementGate is live but not replayed (needs the other indices' bars at the second).
+PARITY WARNING: SENSEX: EnableStaleEntryGate=1 - StaleEntryGate is live but not replayed (needs feed lag; ideal data never trips it).
+PARITY WARNING: SENSEX: EnableNoTradeWindowGate=1 - the replay applies NoTradeWindowGate, but SignalWorker.PostGates does NOT register it, so production ignores this row.
+PARITY WARNING: SENSEX: ConsecutiveLossGate is on - replayed on the simulated trades (backtest-trades and grid), not on the per-minute signal-parity rows.
+Loading candles, snapshots and option history (read-only)...
+Entry quotes from DB (for days without option minute history): 131 from Signals, 2770 from IndicatorSnapshots
+1m: Count=7195, First=2026-10-23T03:45:00.0000000, Last=2026-11-19T09:59:00.0000000
+5m: Count=1439, First=2026-10-23T03:45:00.0000000, Last=2026-11-19T09:55:00.0000000
+Points: Count=6480, First=2026-10-23 10:05:00
+  NIFTY: 7195 1m bars, 1439 5m bars, 6480 decision minutes, 20 sessions, snapshot join 4462 rows
+1m: Count=7801, First=2026-10-23T03:45:00.0000000, Last=2026-11-23T07:35:00.0000000
+5m: Count=1561, First=2026-10-23T03:45:00.0000000, Last=2026-11-23T07:35:00.0000000
+Points: Count=7037, First=2026-10-23 10:05:00
+  BANKNIFTY: 7801 1m bars, 1561 5m bars, 7037 decision minutes, 22 sessions, snapshot join 5018 rows
+1m: Count=7426, First=2026-10-23T03:45:00.0000000, Last=2026-11-23T07:35:00.0000000
+5m: Count=1486, First=2026-10-23T03:45:00.0000000, Last=2026-11-23T07:35:00.0000000
+Points: Count=6696, First=2026-10-23 10:05:00
+  SENSEX: 7426 1m bars, 1486 5m bars, 6696 decision minutes, 21 sessions, snapshot join 4677 rows
+NIFTY: lots 1, lot size 65, breakeven arm True (buffer 8), half-sale at arm False, ladder True, step-lock True, T2 partial False
+BANKNIFTY: lots 2, lot size 30, breakeven arm True (buffer 15), half-sale at arm False, ladder True, step-lock True, T2 partial False
+SENSEX: lots 2, lot size 20, breakeven arm True (buffer 12), half-sale at arm False, ladder True, step-lock True, T2 partial False
+Backtest 2026-11-02 onward, current settings, BreakoutProtection from StrategySettings: 38 trades (14 win / 24 loss), gross P&L +3355.88 Rs
+Wrote docs/research/2026-11-23-breakout/baseline-on\backtest-trades.xlsx and backtest-trades.csv

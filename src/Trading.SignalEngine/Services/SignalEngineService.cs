@@ -232,7 +232,11 @@ public class SignalEngineService
         decimal? rsi5m = null,
         // Previous session close, used ONLY by the opening-conditional RSI band (condition 5).
         // 0 = unknown, which disables that override and leaves the normal band in force.
-        decimal yesterdayClose = 0)
+        decimal yesterdayClose = 0,
+        // Index-stop ATR override (fix 2, EnableAtr5mStop). 0 = use atrRaw (1m ATR) exactly as before.
+        // StrategyManager passes a 5m-ATR value scaled so AtrRiskService's own multiplier yields the
+        // configured Atr5mStopMultiplier x ATR(5m). atrRaw still drives the ATR% filter unchanged.
+        decimal riskAtr = 0)
     {
         // No chain data = no delta confirmation = no signal.
         if (optionChain == null || optionChain.Count == 0)
@@ -373,7 +377,7 @@ public class SignalEngineService
     rsiConfidenceActive);
 
         var optionType = call ? TradingConst.OptionType.CE : TradingConst.OptionType.PE;
-        return BuildSignalResult(symbol, ltp, atrRaw, chain, atmStrike, optionType, confidence, call);
+        return BuildSignalResult(symbol, ltp, riskAtr > 0 ? riskAtr : atrRaw, chain, atmStrike, optionType, confidence, call);
     }
 
     // -- Direction evaluation ---------------------------------------------------------------
@@ -929,7 +933,8 @@ public class SignalEngineService
         decimal atrRaw,
         List<OptionChainData>? optionChain,
         Candle? lastClosedCandle,
-        out decimal confidence)
+        out decimal confidence,
+        decimal riskAtr = 0)
     {
         confidence = 0m;
 
@@ -970,7 +975,7 @@ public class SignalEngineService
 
         var atmStrike = Math.Round(spot / interval, MidpointRounding.AwayFromZero) * interval;
 
-        return BuildSignalResult(symbol, ltp, atrRaw, optionChain, atmStrike, optionType, confidence, call);
+        return BuildSignalResult(symbol, ltp, riskAtr > 0 ? riskAtr : atrRaw, optionChain, atmStrike, optionType, confidence, call);
     }
 
     // ── Option-leg lookup, index/option SL/target math, SignalBuilder ───────────────────────────
@@ -1038,7 +1043,24 @@ public class SignalEngineService
 
         var optionRisk = stopDistance * delta;
         var optionTarget1 = stopDistance * (Settings.AtrTarget1Multiplier / stopMultiplier) * delta;
-        var optionTarget2 = stopDistance * (Settings.AtrTarget2Multiplier / stopMultiplier) * delta;
+        // Target2 reward multiple (fix 2). Default geometry is AtrTarget2Multiplier / AtrStopLossMultiplier
+        // = 1.95 / 1.5 = 1.3R, which needs a 43.5% win rate to break even before costs. When an active
+        // Target2RMultiple row exists (per symbol, then global), BOTH the index T2 and the option T2 are placed at
+        // that many R from entry instead. It must be above the T1 multiple or it is ignored. T1, the stop, the
+        // breakeven arm and the target ladder (which recovers R from OptionT1) are unchanged. No row = unchanged.
+        var target2R = Settings.AtrTarget2Multiplier / stopMultiplier;
+        var target1R = Settings.AtrTarget1Multiplier / stopMultiplier;
+        if (_strategySettings.IsSettingActive("Target2RMultiple", symbol))
+        {
+            var configuredT2R = _strategySettings.GetDecimal("Target2RMultiple", symbol, target2R);
+            if (configuredT2R > target1R)
+            {
+                target2R = configuredT2R;
+                t2 = call ? ltp + stopDistance * target2R : ltp - stopDistance * target2R;
+            }
+        }
+
+        var optionTarget2 = stopDistance * target2R * delta;
 
         optionSL = Math.Round(optionLtp - optionRisk, 2);
 

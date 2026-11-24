@@ -34,7 +34,7 @@ public class SignalWorker : BackgroundService
         new KillSwitchGate(),
         new EventBlackoutGate(),
         new StaleDataGate(),
-       // new MaxDailyTradesGate(),
+        new MaxDailyTradesGate(),      // EnableMaxDailyTradesGate (default off)
         //new CircuitBreakerGate(),
          new ConsecutiveLossGate(),
         new OnePositionGate(),
@@ -52,7 +52,12 @@ public class SignalWorker : BackgroundService
     new StaleEntryGate(),
     new EarlyTrendGate(),
     new NoTradeWindowGate(),       // EnableNoTradeWindowGate; same position as the backtest (after EarlyTrendGate)
+    new OpeningWarmupGate(),       // EnableOpeningWarmupGate (default off) - no entries before 09:45 while 1m EMAs warm up
     new ChopGate(),
+    new EfficiencyRatioGate(),     // EnableEfficiencyRatioGate (default off) - fix 3, 5m chop
+    new CloseBreakoutGate(),       // EnableCloseBreakoutGate (default off) - fix 1, 5m close breakout
+    new StopNoiseGate(),           // EnableStopNoiseGate (default off) - fix 2 guard, stop vs 5m noise
+    new Trend5mGate(),             // EnableTrend5mGate (default off) - 5m EMA20/EMA50 direction
     new FastEmaGate(),
     new SessionTrendGate(),
     new CrossIndexAgreementGate(),
