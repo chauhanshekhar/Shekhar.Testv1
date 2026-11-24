@@ -135,6 +135,8 @@ public static class MarketSeriesBuilder
             Ema20_5m = e20_5,
             Ema50_5m = e50_5,
             Atr5m = atr5,
+            Bars5m = b5,
+            Closed5m = k,
             LastClosedBar = b1[j - 1],
             Prev5mHigh = k > 0 ? b5[k - 1].High : 0.0,
             Prev5mLow = k > 0 ? b5[k - 1].Low : 0.0,

@@ -194,7 +194,7 @@ public static class MarketSnapshotBuilder
         }
 
         // ── 5m RSI — the CALL/PUT entry RSI band is checked against this ─────
-        // SignalEngineService condition 5 compares Call/PutRsiFloor..Ceiling with this value
+        // SignalEngineService condition 5 compares CallRsiFloor..Ceiling with this value
         // (stored as Signal.Rsi5mAtEntry); the 1m RSI above is recorded next to it. The two
         // legitimately disagree — a 1m RSI(14) is far spikier and routinely reads 80+ on a move
         // that reads ~63 on 5m.

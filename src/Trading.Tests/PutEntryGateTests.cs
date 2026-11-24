@@ -37,8 +37,6 @@ public class PutEntryGateTests
             .Set("EnableTrendFilter", 1)
             .Set("EnableRsiFilter", 1)
             .Set("EnableCandleFilter", 1)
-            .Set("PutRsiFloor", 28m)
-            .Set("PutRsiCeiling", 40m)
             .Set("PutOiChangeMinimum", -1000m)
             .Set("PutBodyPctMinimum", 30m)
             .Set("PutMinAtrPercent", 0.03m)
@@ -169,86 +167,18 @@ public class PutEntryGateTests
         Assert.Contains(r.FailureReasons, x => x.Contains("4 LTP < Prev5mLow"));
     }
 
-    // ── 5: RSI band, tightened to 28-40 ─────────────────────────────────────────────────────
+    // ── 5: PUT has no RSI condition (PutRsiFloor/PutRsiCeiling were removed) ─────────────────
 
     [Theory]
-    [InlineData(27.99, false)]
-    [InlineData(28.00, true)]     // the tightened floor
-    [InlineData(35.00, true)]
-    [InlineData(40.00, true)]     // the tightened ceiling
-    [InlineData(40.01, false)]
-    public void Condition5_RsiBand(double rsi, bool expected)
+    [InlineData(5.0, 5.0)]
+    [InlineData(95.0, 95.0)]
+    [InlineData(35.0, 80.0)]
+    public void Put_HasNoRsiCondition(double rsi, double rsi5m)
     {
-        Assert.Equal(expected, RunPut(rsi: (decimal)rsi).Signal != null);
+        var r = RunPut(rsi: (decimal)rsi, rsi5m: (decimal)rsi5m);
+        Assert.NotNull(r.Signal);
+        Assert.DoesNotContain(r.FailureReasons, x => x.Contains("RSI"));
     }
-
-    [Fact]
-    public void Condition5_DeactivatingEitherBound_SkipsTheRsiCheckEntirely()
-    {
-        Assert.Null(RunPut(rsi: 95m).Signal);
-        Assert.NotNull(RunPut(Settings().SetInactive("PutRsiCeiling"), rsi: 95m).Signal);
-        Assert.NotNull(RunPut(Settings().SetInactive("PutRsiFloor"), rsi: 5m).Signal);
-    }
-
-    [Fact]
-    public void Condition5_UsesFiveMinuteRsi_NotOneMinute()
-    {
-        var blocked = RunPut(rsi: 35m, rsi5m: 60m);
-        Assert.Null(blocked.Signal);
-        Assert.Contains(blocked.FailureReasons, x => x.Contains("5m RSI was 60.00"));
-
-        Assert.NotNull(RunPut(rsi: 80m, rsi5m: 35m).Signal);
-    }
-
-    [Fact]
-    public void Condition5_NullFiveMinuteRsi_FailsClosed()
-    {
-        var engine = SignalEngineTestFactory.Create(Settings());
-        var r = engine.GenerateSignalDetailed(
-            symbol: SignalEngineTestFactory.Symbol, ltp: Spot, ema20: Spot + 50m, ema50: Spot + 100m,
-            pcr: 0.75m, rsi: 35m, currentVolume: 0m, avgVolume20: 0m, priceChangePct: -0.50m,
-            atrPct: 0.15m, atrRaw: 30m,
-            optionChain: SignalEngineTestFactory.BuildChain(Spot),
-            strategyHint: TradingConst.StrategyType.Single,
-            lastClosedCandle: SignalEngineTestFactory.MakeCandle(
-                open: Spot + 20m, close: Spot, high: Spot + 22m, low: Spot - 2m),
-            prev5mLow: Spot + 10m, dayOpen: Spot + 100m, dayHigh: Spot + 100m, dayChangePct: -0.20m,
-            rsi5m: null);
-
-        Assert.Null(r.Signal);
-        Assert.Contains(r.FailureReasons, x => x.Contains("5m RSI was N/A"));
-    }
-
-    // ── 5b: optional second RSI band (EnablePutRsiBand2) ───────────────────────────────────
-
-    private static FakeStrategySettingsService Band2(bool enabled = true) =>
-        Settings()
-            .Set("EnablePutRsiBand2", enabled ? 1 : 0)
-            .Set("PutRsiBand2Floor", 42m)
-            .Set("PutRsiBand2Ceiling", 49m);
-
-    [Fact]
-    public void Band2_OffByDefault_RsiAboveCeilingStillRejected()
-        => Assert.Null(RunPut(Settings(), rsi: 45m).Signal);
-
-    [Fact]
-    public void Band2_On_AcceptsRsiInsideSecondBand()
-        => Assert.NotNull(RunPut(Band2(), rsi: 45m).Signal);
-
-    [Fact]
-    public void Band2_On_FirstBandStillAccepted()
-        => Assert.NotNull(RunPut(Band2(), rsi: 35m).Signal);
-
-    [Theory]
-    [InlineData(41.0)]   // gap between band 1 (<=40) and band 2 (>=42) stays rejected
-    [InlineData(49.5)]   // above band 2
-    [InlineData(27.9)]   // below band 1
-    public void Band2_On_OutsideBothBands_Rejected(double rsi)
-        => Assert.Null(RunPut(Band2(), rsi: (decimal)rsi).Signal);
-
-    [Fact]
-    public void Band2_SwitchedOff_BehavesLikeNoBand2()
-        => Assert.Null(RunPut(Band2(enabled: false), rsi: 45m).Signal);
 
     // ── 2b: EMA gap (shared: EnableEmaGapFilter, EmaGapMinPoints, EmaGapMaxPoints) ─────────
 
@@ -484,7 +414,7 @@ public class PutEntryGateTests
     [Fact]
     public void FailureReasons_NeverNameAnUnenforcedCondition()
     {
-        var r = RunPut(rsi: 80m);
+        var r = RunPut(Gap(min: 10000m));   // any failing condition
 
         Assert.Null(r.Signal);
         Assert.DoesNotContain(r.FailureReasons, x => x.Contains("StrongTrend"));
