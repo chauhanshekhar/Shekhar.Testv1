@@ -118,6 +118,9 @@ public sealed class ExecutionSimulator
     private readonly OptionHistoryIndex? _options;
     private readonly EntryQuoteIndex? _quotes;
 
+    /// <summary>Symbols treated as active for CrossIndexAgreementGate (live: IInstrumentCache.GetActive). Null = the gate is not replayed.</summary>
+    public IReadOnlyCollection<string>? CrossIndexSymbols { get; init; }
+
     /// <param name="quotes">Real entry quotes from the database for days without OptionMinuteHistory (null = average-premium model).</param>
     public ExecutionSimulator(
         EntryEvaluator entry,
@@ -138,6 +141,11 @@ public sealed class ExecutionSimulator
         SimulationOptions opt)
     {
         var result = new SimulationResult();
+
+        // CrossIndexAgreementGate needs every symbol's 1m series at each decision time.
+        var crossIndex = CrossIndexSymbols is { Count: > 0 } active
+            ? new Trading.Backtest.Entry.CrossIndexReplay(data.Select(x => (x.Symbol, x.Bars)), active)
+            : null;
 
         var sides = opt.BothSides
             ? new[] { TradeSide.Call, TradeSide.Put }
@@ -372,6 +380,21 @@ public sealed class ExecutionSimulator
                         "DuplicateSignalGate",
                         lastClose + TimeSpan.FromMinutes(5));
 
+                    continue;
+                }
+
+                // CrossIndexAgreementGate (live post-gate, after SessionTrendGate and before HandoffCooldownGate).
+                if (crossIndex is not null &&
+                    _settings.GetBool(CrossIndexAgreementGate.EnableKey, symbol, false) &&
+                    crossIndex.Block(
+                        symbol,
+                        signalType,
+                        p.TimeUtc,
+                        _settings.GetInt(CrossIndexAgreementGate.SideKey, symbol, CrossIndexAgreementGate.SideBoth),
+                        _settings.GetInt(CrossIndexAgreementGate.LookbackKey, symbol, CrossIndexAgreementGate.DefaultLookback),
+                        _settings.GetInt(CrossIndexAgreementGate.MinAgreeKey, symbol, CrossIndexAgreementGate.DefaultMinAgree)) is not null)
+                {
+                    Rej("CrossIndexAgreementGate");
                     continue;
                 }
 

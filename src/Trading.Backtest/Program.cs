@@ -359,7 +359,10 @@ internal static class Program
             var evaluator = new EntryEvaluator(live, trading, instruments, SelectorMode.Replay,
                 new EntryRules { SkipBreakoutProtection = skipBreakout }, tradingMode);
             var exit = ExitModel.From(live, trading, exitInputs.AvgDelta, exitInputs.AvgPremium, exitInputs.LotSizes);
-            var simulator = new ExecutionSimulator(evaluator, live, exit, options, quotes);
+            var simulator = new ExecutionSimulator(evaluator, live, exit, options, quotes)
+            {
+                CrossIndexSymbols = instruments.Select(i => i.Symbol).ToList(),
+            };
             foreach (var sym in ExitModel.SymbolNames)
             {
                 var ec = exit.Symbols[sym];
@@ -752,7 +755,6 @@ internal static class Program
         {
             foreach (var (key, why) in new[]
             {
-                ("EnableCrossIndexAgreementGate", "CrossIndexAgreementGate is live but not replayed (needs the other indices' bars at the second)"),
                 ("EnableMarketDirectionGate", "MarketDirectionGate is live but not replayed (reads the *_FUT_5m series)"),
                 ("EnablePutS1Gate", "PutS1Gate is live but not replayed (needs the entry leg's option delta)"),
                 ("EnableStaleEntryGate", "StaleEntryGate is live but not replayed (needs feed lag; ideal data never trips it)"),
@@ -779,6 +781,10 @@ internal static class Program
 
             if (live.IsSettingActive("MinDirectionalConfidence", symbol))
                 yield return $"{symbol}: MinDirectionalConfidence is active - the confidence floor is not replayed.";
+
+            if (live.GetBool("EnableCrossIndexAgreementGate", symbol, false))
+                yield return $"{symbol}: CrossIndexAgreementGate is replayed on the simulated trades (backtest-trades and grid) from the other active indices' closed 1m bars, " +
+                             "not on the per-minute signal-parity rows; the active set is today's TradingInstruments.";
 
             if (live.GetBool("EnableConsecutiveLossGate", symbol, true))
                 yield return $"{symbol}: ConsecutiveLossGate is on - replayed on the simulated trades (backtest-trades and grid), " +

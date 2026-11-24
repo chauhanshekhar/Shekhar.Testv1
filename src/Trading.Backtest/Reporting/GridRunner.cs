@@ -64,7 +64,10 @@ public sealed class GridRunner
             var exit = ExitModel.From(settings, _trading, _exitInputs.AvgDelta, _exitInputs.AvgPremium, _exitInputs.LotSizes);
             if (config.Exit is { } geometry)
                 exit = geometry.ApplyTo(exit);
-            var sim = new ExecutionSimulator(evaluator, settings, exit, _options, _quotes);
+            var sim = new ExecutionSimulator(evaluator, settings, exit, _options, _quotes)
+            {
+                CrossIndexSymbols = _instruments.Select(i => i.Symbol).ToList(),
+            };
             var simOptions = new SimulationOptions(config.Side, opt.StopModel, opt.PremiumMode, opt.Costs,
                 MaxTradesPerSymbolDay: config.Sampling?.MaxTradesPerSymbolDay ?? config.Rules?.Trend?.MaxTradesPerSymbolDay,
                 MaxConcurrentPositions: config.Slots?.MaxConcurrent ?? 1,

@@ -990,7 +990,8 @@ public sealed class EntryEvaluator
                    _settings.GetInt(OpeningWarmupGate.EndKey, symbol, OpeningWarmupGate.DefaultEndMinute)) is { } warm)
             return ("OpeningWarmupGate", $"{warm} {signalType} ({symbol})");
 
-        if (_settings.GetBool(CloseBreakoutGate.EnableKey, symbol, false))
+        if (_settings.GetBool(CloseBreakoutGate.EnableKey, symbol, false)
+            && CloseBreakoutGate.AppliesTo(_settings.GetInt(CloseBreakoutGate.SideKey, symbol, CloseBreakoutGate.SideBoth), isCall))
         {
             var lookback = Math.Max(1, _settings.GetInt(CloseBreakoutGate.LookbackKey, symbol, CloseBreakoutGate.DefaultLookback));
             if (CloseBreakoutGate.Evaluate(Tail5m(p, lookback + 1), (decimal)p.Ltp, lookback, isCall, symbol) is { } brk)
