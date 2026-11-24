@@ -24,19 +24,6 @@ public class OptionLegSelector
     // Resolved once per call — cached 60s in SystemSettingsService
     private TradingSettings Settings => _settingsService.GetAsync().GetAwaiter().GetResult();
 
-    public bool IsLiquid(string symbol, OptionChainData o)
-    {
-        var minVolume = Settings.LiquidityMinVolume.GetValueOrDefault(symbol, 50_000);
-        var minOi = Settings.LiquidityMinOI.GetValueOrDefault(symbol, 10_000);
-        var minLtp = Settings.LiquidityMinLtp.GetValueOrDefault(symbol, 15m);
-        var maxLtp = Settings.LiquidityMaxLtp.GetValueOrDefault(symbol, 300m);
-
-        return o.Volume >= minVolume &&
-               o.OpenInterest >= minOi &&
-               o.Ltp >= minLtp &&
-               o.Ltp <= maxLtp;
-    }
-
     public decimal ResolveAtmStrike(string symbol, decimal ltp, List<OptionChainData> optionChain)
     {
         var interval = (decimal)_instrumentCache.GetStrikeInterval(symbol);
@@ -51,9 +38,9 @@ public class OptionLegSelector
         return Math.Round(spot / interval, MidpointRounding.AwayFromZero) * interval;
     }
 
-    public OptionChainData? SelectLiquidLeg(string symbol, List<OptionChainData> chain, string optionType, decimal atmStrike) =>
+    public OptionChainData? SelectAtmLeg(string symbol, List<OptionChainData> chain, string optionType, decimal atmStrike) =>
         chain
-            .Where(x => x.OptionType == optionType && IsLiquid(symbol, x))
+            .Where(x => x.OptionType == optionType && x.Ltp > 0)
             .OrderBy(x => Math.Abs(x.StrikePrice - atmStrike))
             .ThenByDescending(x => x.Volume)
             .ThenByDescending(x => x.OpenInterest)

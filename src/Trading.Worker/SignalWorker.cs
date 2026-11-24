@@ -34,8 +34,6 @@ public class SignalWorker : BackgroundService
         new KillSwitchGate(),
         new EventBlackoutGate(),
         new StaleDataGate(),
-        new MaxDailyTradesGate(),      // EnableMaxDailyTradesGate (default off)
-        //new CircuitBreakerGate(),
          new ConsecutiveLossGate(),
         new OnePositionGate(),
         new AtrGate(),
@@ -44,7 +42,7 @@ public class SignalWorker : BackgroundService
 
     internal static readonly IPostSignalGate[] PostGates =
     [
-    new WhipsawShadowGate(),       // First: diagnostic only, never blocks
+    //new WhipsawShadowGate(),       // First: diagnostic only, never blocks
     new OiConfirmationGate(),
     new DuplicateSignalGate(),
     new RiskGate(),
@@ -54,17 +52,12 @@ public class SignalWorker : BackgroundService
     new NoTradeWindowGate(),       // EnableNoTradeWindowGate; same position as the backtest (after EarlyTrendGate)
     new OpeningWarmupGate(),       // EnableOpeningWarmupGate (default off) - no entries before 09:45 while 1m EMAs warm up
     new ChopGate(),
-    new EfficiencyRatioGate(),     // EnableEfficiencyRatioGate (default off) - fix 3, 5m chop
-    new CloseBreakoutGate(),       // EnableCloseBreakoutGate (default off) - fix 1, 5m close breakout
-    new StopNoiseGate(),           // EnableStopNoiseGate (default off) - fix 2 guard, stop vs 5m noise
-    new Trend5mGate(),             // EnableTrend5mGate (default off) - 5m EMA20/EMA50 direction
     new FastEmaGate(),
     new SessionTrendGate(),
     new CrossIndexAgreementGate(),
     new MarketDirectionGate(),
-    new VwapSideGate(),
+    //new VwapSideGate(),
     new HandoffCooldownGate(),
-    new PutS1Gate(),
     new RiskRewardGate(),
     new SpreadGate(),
     ];

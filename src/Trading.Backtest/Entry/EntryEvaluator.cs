@@ -474,7 +474,7 @@ public sealed class EntryEvaluator
         if (_settings.GetBool("EnableAtrFilter", p.Symbol, true) && _settings.IsSettingActive("MinAtrPercent", p.Symbol)
             && (decimal)p.AtrPct < _settings.GetDecimal("MinAtrPercent", p.Symbol, 0.10m))
             return EntryVerdict.GateBlock("AtrGate", $"ATR {p.AtrPct:F4}% below the minimum", path);
-        if (_settings.GetBool("EnableIndexStopFloor", p.Symbol, true) && (decimal)p.Atr < IndexStopFloorGate.MinAtrRaw(_trading))
+        if (LiveGates.Has<IndexStopFloorGate>() && _settings.GetBool("EnableIndexStopFloor", p.Symbol, true) && (decimal)p.Atr < IndexStopFloorGate.MinAtrRaw(_trading))
             return EntryVerdict.GateBlock("IndexStopFloorGate", $"ATR {p.Atr:F2} pts below the index stop floor", path);
         return EntryVerdict.Pass(path);
     }
@@ -498,15 +498,15 @@ public sealed class EntryEvaluator
         if (_settings.GetBool("EnableAtrFilter", symbol, true) && _settings.IsSettingActive("MinAtrPercent", symbol)
             && (decimal)p.AtrPct < _settings.GetDecimal("MinAtrPercent", symbol, 0.10m))
             return EntryVerdict.GateBlock("AtrGate", $"ATR {p.AtrPct:F4}% below the minimum", path);
-        if (_settings.GetBool("EnableIndexStopFloor", symbol, true) && (decimal)p.Atr < IndexStopFloorGate.MinAtrRaw(_trading))
+        if (LiveGates.Has<IndexStopFloorGate>() && _settings.GetBool("EnableIndexStopFloor", symbol, true) && (decimal)p.Atr < IndexStopFloorGate.MinAtrRaw(_trading))
             return EntryVerdict.GateBlock("IndexStopFloorGate", $"ATR {p.Atr:F2} pts below the index stop floor", path);
-        if (_settings.GetBool(EarlyTrendGate.EnableKey, symbol, false))
+        if (LiveGates.Has<EarlyTrendGate>() && _settings.GetBool(EarlyTrendGate.EnableKey, symbol, false))
         {
             var sideSetting = _settings.GetInt(EarlyTrendGate.SideKey, symbol, EarlyTrendGate.SideCallOnly);
             if (EarlyTrendReason(p, signalType, sideSetting) is { } why)
                 return EntryVerdict.GateBlock("EarlyTrendGate", why, path);
         }
-        if (_settings.GetBool(NoTradeWindowGate.EnableKey, symbol, false))
+        if (LiveGates.Has<NoTradeWindowGate>() && _settings.GetBool(NoTradeWindowGate.EnableKey, symbol, false))
         {
             var sideSetting = _settings.GetInt(NoTradeWindowGate.SideKey, symbol, NoTradeWindowGate.SideBoth);
             if (NoTradeWindowGate.AppliesTo(sideSetting, signalType)
@@ -565,7 +565,7 @@ public sealed class EntryEvaluator
         if (_settings.GetBool("EnableAtrFilter", p.Symbol, true) && _settings.IsSettingActive("MinAtrPercent", p.Symbol)
             && (decimal)p.AtrPct < _settings.GetDecimal("MinAtrPercent", p.Symbol, 0.10m))
             return EntryVerdict.GateBlock("AtrGate", $"ATR {p.AtrPct:F4}% below the minimum", path);
-        if (_settings.GetBool("EnableIndexStopFloor", p.Symbol, true) && (decimal)p.Atr < IndexStopFloorGate.MinAtrRaw(_trading))
+        if (LiveGates.Has<IndexStopFloorGate>() && _settings.GetBool("EnableIndexStopFloor", p.Symbol, true) && (decimal)p.Atr < IndexStopFloorGate.MinAtrRaw(_trading))
             return EntryVerdict.GateBlock("IndexStopFloorGate", $"ATR {p.Atr:F2} pts below the index stop floor", path);
         return EntryVerdict.Pass(path);
     }
@@ -589,7 +589,7 @@ public sealed class EntryEvaluator
             return EntryVerdict.NoSignal("TrendStrategy", "ATR% below the setup minimum");
         if (t.RequireAbovePrev5mHigh && !(p.Prev5mHigh > 0 && p.LastClosedBar.Close > p.Prev5mHigh))
             return EntryVerdict.NoSignal("TrendStrategy", "1m close not above the previous 5m high");
-        if (_settings.GetBool("EnableIndexStopFloor", p.Symbol, true) && (decimal)p.Atr < IndexStopFloorGate.MinAtrRaw(_trading))
+        if (LiveGates.Has<IndexStopFloorGate>() && _settings.GetBool("EnableIndexStopFloor", p.Symbol, true) && (decimal)p.Atr < IndexStopFloorGate.MinAtrRaw(_trading))
             return EntryVerdict.GateBlock("IndexStopFloorGate", $"ATR {p.Atr:F2} pts below the index stop floor", path);
         return EntryVerdict.Pass(path);
     }
@@ -666,15 +666,15 @@ public sealed class EntryEvaluator
         var side = signalType == TradingConst.SignalType.CALL ? TradeSide.Call : TradeSide.Put;
         if (SelectorBlock(p, side, gapTrend: false) is { } sel)
             return EntryVerdict.GateBlock(sel.By, sel.Reason, path);
-        if (_settings.GetBool("EnableIndexStopFloor", p.Symbol, true) && (decimal)p.Atr < IndexStopFloorGate.MinAtrRaw(_trading))
+        if (LiveGates.Has<IndexStopFloorGate>() && _settings.GetBool("EnableIndexStopFloor", p.Symbol, true) && (decimal)p.Atr < IndexStopFloorGate.MinAtrRaw(_trading))
             return EntryVerdict.GateBlock("IndexStopFloorGate", $"ATR {p.Atr:F2} pts < index stop floor ({p.Symbol})", path);
-        if (_settings.GetBool(EarlyTrendGate.EnableKey, p.Symbol, false))
+        if (LiveGates.Has<EarlyTrendGate>() && _settings.GetBool(EarlyTrendGate.EnableKey, p.Symbol, false))
         {
             var reason = EarlyTrendReason(p, signalType, _settings.GetInt(EarlyTrendGate.SideKey, p.Symbol, EarlyTrendGate.SideCallOnly));
             if (reason is not null)
                 return EntryVerdict.GateBlock("EarlyTrendGate", reason, path);
         }
-        if (_settings.GetBool(NoTradeWindowGate.EnableKey, p.Symbol, false)
+        if (LiveGates.Has<NoTradeWindowGate>() && _settings.GetBool(NoTradeWindowGate.EnableKey, p.Symbol, false)
             && NoTradeWindowGate.AppliesTo(_settings.GetInt(NoTradeWindowGate.SideKey, p.Symbol, NoTradeWindowGate.SideBoth), signalType))
         {
             var reason = NoTradeWindowGate.Evaluate(SessionClock.MinuteOfDayIst(p.TimeUtc),
@@ -853,11 +853,11 @@ public sealed class EntryEvaluator
         }
 
         // ── post-gates that are pure functions of the point ──────────────────────────────────────────────────────────
-        if (_settings.GetBool("EnableIndexStopFloor", symbol, true)
+        if (LiveGates.Has<IndexStopFloorGate>() && _settings.GetBool("EnableIndexStopFloor", symbol, true)
             && (decimal)p.Atr < IndexStopFloorGate.MinAtrRaw(_trading))
             return EntryVerdict.GateBlock("IndexStopFloorGate", $"ATR {p.Atr:F2} pts < index stop floor ({symbol})", path);
 
-        if (_settings.GetBool(EarlyTrendGate.EnableKey, symbol, false) && !(gapTrend && _rules.GapTrendSkipsEarlyTrendGate))
+        if (LiveGates.Has<EarlyTrendGate>() && _settings.GetBool(EarlyTrendGate.EnableKey, symbol, false) && !(gapTrend && _rules.GapTrendSkipsEarlyTrendGate))
         {
             var sideSetting = _settings.GetInt(EarlyTrendGate.SideKey, symbol, EarlyTrendGate.SideCallOnly);
             var reason = EarlyTrendReason(p, signalType, sideSetting);
@@ -871,7 +871,7 @@ public sealed class EntryEvaluator
         // NOTE: NoTradeWindowGate is NOT registered in the live SignalWorker.PostGates array, so production ignores
         // EnableNoTradeWindowGate. It is kept here because the existing research configurations rely on it; Program warns
         // when the setting is on so a parity run is not silently stricter than production.
-        if (_settings.GetBool(NoTradeWindowGate.EnableKey, symbol, false))
+        if (LiveGates.Has<NoTradeWindowGate>() && _settings.GetBool(NoTradeWindowGate.EnableKey, symbol, false))
         {
             var sideSetting = _settings.GetInt(NoTradeWindowGate.SideKey, symbol, NoTradeWindowGate.SideBoth);
             if (NoTradeWindowGate.AppliesTo(sideSetting, signalType))
@@ -947,17 +947,17 @@ public sealed class EntryEvaluator
         var dayOpen = (decimal)(p.SessionOpen > 0 ? p.SessionOpen : p.DayOpen);
         var yesterdayClose = p.PrevClose is { } pc ? (decimal)pc : 0m;
 
-        if (_settings.GetBool(ChopGate.EnableKey, symbol, false) && p.Chop15 is { } chop && (decimal)chop > ChopGate.MaxChop)
+        if (LiveGates.Has<ChopGate>() && _settings.GetBool(ChopGate.EnableKey, symbol, false) && p.Chop15 is { } chop && (decimal)chop > ChopGate.MaxChop)
             return ("ChopGate", $"Chop gate: 15-bar chop {chop:F2} > {ChopGate.MaxChop} ({symbol})");
 
-        if (_settings.GetBool(FastEmaGate.EnableKey, symbol, false)
+        if (LiveGates.Has<FastEmaGate>() && _settings.GetBool(FastEmaGate.EnableKey, symbol, false)
             && !(_settings.GetBool(FastEmaGate.GapUpOnlyKey, symbol, true)
                  && !FastEmaGate.OpenedGapUp(dayOpen, yesterdayClose, _settings.GetDecimal(FastEmaGate.GapPctKey, symbol, 0.30m)))
             && FastEmaGate.Evaluate(signalType, (decimal)p.Ema9, (decimal)p.Ema21,
                    _settings.GetInt(FastEmaGate.SideKey, symbol, FastEmaGate.SideCallOnly)) is { } fast)
             return ("FastEmaGate", $"{fast} ({symbol})");
 
-        if (_settings.GetBool(SessionTrendGate.EnableKey, symbol, false))
+        if (LiveGates.Has<SessionTrendGate>() && _settings.GetBool(SessionTrendGate.EnableKey, symbol, false))
         {
             var dayLow = (decimal)(p.SessionLow > 0 && p.SessionLow < double.MaxValue ? p.SessionLow : p.DayLow);
             var dayHigh = (decimal)(p.SessionHigh > 0 ? p.SessionHigh : p.DayHigh);

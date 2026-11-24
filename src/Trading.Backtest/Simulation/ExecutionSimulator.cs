@@ -302,7 +302,8 @@ public sealed class ExecutionSimulator
                 }
 
                 // OI confirmation.
-                if (_settings.GetBool(
+                if (Trading.Backtest.Entry.LiveGates.Has<OiConfirmationGate>() &&
+                    _settings.GetBool(
                     "EnableOiConfirmationGate", symbol, true) &&
                     _options is not null)
                 {
@@ -326,7 +327,8 @@ public sealed class ExecutionSimulator
                     if (confirms is null)
                         result.OiUnverifiable++;
                 }
-                else if (_settings.GetBool(
+                else if (Trading.Backtest.Entry.LiveGates.Has<OiConfirmationGate>() &&
+                    _settings.GetBool(
                     "EnableOiConfirmationGate", symbol, true))
                 {
                     result.OiUnverifiable++;
@@ -361,6 +363,7 @@ public sealed class ExecutionSimulator
 
                 // HandoffCooldownGate.
                 if (!opt.DisableHandoffCooldown &&
+                    Trading.Backtest.Entry.LiveGates.Has<HandoffCooldownGate>() &&
                     _settings.GetBool(
                         HandoffCooldownGate.EnableKey, symbol, false))
                 {

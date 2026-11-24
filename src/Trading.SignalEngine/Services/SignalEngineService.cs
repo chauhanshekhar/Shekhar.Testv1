@@ -158,18 +158,6 @@ public class SignalEngineService
             ? _strategySettings.IsSettingActive("CallRsiFloor", symbol) && _strategySettings.IsSettingActive("CallRsiCeiling", symbol)
             : _strategySettings.IsSettingActive("PutRsiFloor", symbol) && _strategySettings.IsSettingActive("PutRsiCeiling", symbol);
 
-    private bool IsLiquid(string symbol, OptionChainData o)
-    {
-        var minVolume = Settings.LiquidityMinVolume.GetValueOrDefault(symbol, 50_000);
-        var minOi = Settings.LiquidityMinOI.GetValueOrDefault(symbol, 10_000);
-        var minLtp = Settings.LiquidityMinLtp.GetValueOrDefault(symbol, 15m);
-        var maxLtp = Settings.LiquidityMaxLtp.GetValueOrDefault(symbol, 300m);
-
-        return o.Volume >= minVolume &&
-               o.OpenInterest >= minOi &&
-               o.Ltp >= minLtp &&
-               o.Ltp <= maxLtp;
-    }
     public Signal? GenerateSignal(
         string symbol,
         decimal ltp,
@@ -271,7 +259,7 @@ public class SignalEngineService
         var bodyPctMinimum = _strategySettings.GetDecimal("BodyPctMinimum", symbol, 30m);
         var (rsiCallFloor, rsiCallCeiling, rsiPutFloor, rsiPutCeiling) = RsiConfidenceBand(symbol);
 
-        // -- ATM strike + liquid legs ------------------------------------------------------------
+        // -- ATM strike + priced legs (the volume/OI/premium liquidity filter was removed; only Ltp > 0 is required) ------------------------------------------------------------
         var interval = (decimal)_instrumentCache.GetStrikeInterval(symbol);
         var spot = optionChain
             .Where(x => x.UnderlyingLtp > 0)
@@ -285,21 +273,21 @@ public class SignalEngineService
 
         var chain = optionChain!;
         var atmCe = chain
-            .Where(x => x.OptionType == TradingConst.OptionType.CE && IsLiquid(symbol, x))
+            .Where(x => x.OptionType == TradingConst.OptionType.CE && x.Ltp > 0)
             .OrderBy(x => Math.Abs(x.StrikePrice - atmStrike))
             .ThenByDescending(x => x.Volume)
             .ThenByDescending(x => x.OpenInterest)
             .FirstOrDefault();
 
         var atmPe = chain
-            .Where(x => x.OptionType == TradingConst.OptionType.PE && IsLiquid(symbol, x))
+            .Where(x => x.OptionType == TradingConst.OptionType.PE && x.Ltp > 0)
             .OrderBy(x => Math.Abs(x.StrikePrice - atmStrike))
             .ThenByDescending(x => x.Volume)
             .ThenByDescending(x => x.OpenInterest)
             .FirstOrDefault();
 
         if (atmCe == null || atmPe == null)
-            return SignalGenerationResult.Failed("No liquid ATM CE/PE strikes found");
+            return SignalGenerationResult.Failed("No priced ATM CE/PE strikes found");
 
         var ceAtmDelta = atmCe.Delta;
         var peAtmDelta = atmPe.Delta;
@@ -986,7 +974,7 @@ public class SignalEngineService
         var chainLeg = chain
     .Where(o =>
         o.OptionType == optionType &&
-        IsLiquid(symbol, o))
+        o.Ltp > 0)
     .OrderBy(o => Math.Abs(o.StrikePrice - atmStrike))
     .ThenByDescending(o => o.Volume)
     .ThenByDescending(o => o.OpenInterest)

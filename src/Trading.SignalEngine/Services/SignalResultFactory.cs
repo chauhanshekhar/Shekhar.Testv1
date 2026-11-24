@@ -36,7 +36,7 @@ public class SignalResultFactory
         string symbol, decimal ltp, decimal atrRaw, List<OptionChainData> chain, decimal atmStrike,
         string optionType, decimal confidence, bool call)
     {
-        var chainLeg = _legSelector.SelectLiquidLeg(symbol, chain, optionType, atmStrike);
+        var chainLeg = _legSelector.SelectAtmLeg(symbol, chain, optionType, atmStrike);
         var optionLtp = chainLeg?.Ltp ?? 0m;
 
         // No valid premium — chain data stale or strike not found. Block signal.
