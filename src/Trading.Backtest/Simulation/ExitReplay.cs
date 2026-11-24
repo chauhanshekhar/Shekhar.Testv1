@@ -31,7 +31,7 @@ public static class ExitReplay
         var lots = cfg.Lots ?? model.Lots;
         var entry = cfg.EntryPremium;
         var t1 = r * model.T1Mult / model.StopMult;
-        var t2 = r * model.T2Mult / model.StopMult;
+        var t2 = cfg.Target2R is { } t2R ? r * t2R : r * model.T2Mult / model.StopMult;   // Target2RMultiple row, else the ATR geometry
         var mid = cfg.MidR * r;
         var final = cfg.FinalR * r;
         var trailAct = entry * model.TrailPct / 100.0;

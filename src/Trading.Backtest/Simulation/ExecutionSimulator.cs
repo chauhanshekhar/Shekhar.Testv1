@@ -48,10 +48,10 @@ public sealed record SimulationOptions(
 /// Only trades already closed at the decision time count, as in TradeJournal. Unrealised P&amp;L is taken as 0: with one
 /// position slot nothing is open when a new entry is considered.
 /// </summary>
-public sealed record DayRiskLimits(int CompiledMaxConsecLosses, decimal Capital, decimal MaxLossPercent, bool IsPaper)
+public sealed record DayRiskLimits(int CompiledMaxConsecLosses, decimal Capital, decimal MaxLossPercent, bool IsPaper, int CompiledMaxTradesPerDay = 10)
 {
     public static DayRiskLimits From(Trading.Infrastructure.TradingSettings t, Trading.Domain.Entities.TradingMode? mode) =>
-        new(t.MaxConsecLosses, t.Capital, t.MaxLossPercent, mode == Trading.Domain.Entities.TradingMode.Paper);
+        new(t.MaxConsecLosses, t.Capital, t.MaxLossPercent, mode == Trading.Domain.Entities.TradingMode.Paper, t.MaxTradesPerDay);
 }
 
 /// <summary>
@@ -118,6 +118,9 @@ public sealed class ExecutionSimulator
     private readonly OptionHistoryIndex? _options;
     private readonly EntryQuoteIndex? _quotes;
 
+    /// <summary>Symbols treated as active for CrossIndexAgreementGate (live: IInstrumentCache.GetActive). Null = the gate is not replayed.</summary>
+    public IReadOnlyCollection<string>? CrossIndexSymbols { get; init; }
+
     /// <param name="quotes">Real entry quotes from the database for days without OptionMinuteHistory (null = average-premium model).</param>
     public ExecutionSimulator(
         EntryEvaluator entry,
@@ -138,6 +141,11 @@ public sealed class ExecutionSimulator
         SimulationOptions opt)
     {
         var result = new SimulationResult();
+
+        // CrossIndexAgreementGate needs every symbol's 1m series at each decision time.
+        var crossIndex = CrossIndexSymbols is { Count: > 0 } active
+            ? new Trading.Backtest.Entry.CrossIndexReplay(data.Select(x => (x.Symbol, x.Bars)), active)
+            : null;
 
         var sides = opt.BothSides
             ? new[] { TradeSide.Call, TradeSide.Put }
@@ -162,6 +170,9 @@ public sealed class ExecutionSimulator
 
         var tradesPerSymbolDay =
             new Dictionary<(string, DateTime), int>();
+
+        // MaxDailyTradesGate counts the day's accepted signals across all symbols (live: Signals created today, not OrderRejected).
+        var tradesPerDay = new Dictionary<DateTime, int>();
 
         var validEntrySeen = 0;
 
@@ -256,6 +267,17 @@ public sealed class ExecutionSimulator
                             Rej("ConsecutiveLossGate");
                             continue;
                         }
+                    }
+                }
+
+                // MaxDailyTradesGate (live pre-gate): applied only when its StrategySettings row is on; 0 = unlimited.
+                if (_settings.GetBool("EnableMaxDailyTradesGate", symbol, false))
+                {
+                    var maxPerDay = _settings.GetInt("MaxTradesPerDay", symbol, opt.DayRisk?.CompiledMaxTradesPerDay ?? 10);
+                    if (maxPerDay > 0 && tradesPerDay.GetValueOrDefault(p.TimeIst.Date) >= maxPerDay)
+                    {
+                        Rej("MaxDailyTradesGate");
+                        continue;
                     }
                 }
 
@@ -361,6 +383,21 @@ public sealed class ExecutionSimulator
                     continue;
                 }
 
+                // CrossIndexAgreementGate (live post-gate, after SessionTrendGate and before HandoffCooldownGate).
+                if (crossIndex is not null &&
+                    _settings.GetBool(CrossIndexAgreementGate.EnableKey, symbol, false) &&
+                    crossIndex.Block(
+                        symbol,
+                        signalType,
+                        p.TimeUtc,
+                        _settings.GetInt(CrossIndexAgreementGate.SideKey, symbol, CrossIndexAgreementGate.SideBoth),
+                        _settings.GetInt(CrossIndexAgreementGate.LookbackKey, symbol, CrossIndexAgreementGate.DefaultLookback),
+                        _settings.GetInt(CrossIndexAgreementGate.MinAgreeKey, symbol, CrossIndexAgreementGate.DefaultMinAgree)) is not null)
+                {
+                    Rej("CrossIndexAgreementGate");
+                    continue;
+                }
+
                 // HandoffCooldownGate.
                 if (!opt.DisableHandoffCooldown &&
                     Trading.Backtest.Entry.LiveGates.Has<HandoffCooldownGate>() &&
@@ -438,6 +475,8 @@ public sealed class ExecutionSimulator
                         trade.CostRs
                     ));
                 }
+
+                tradesPerDay[p.TimeIst.Date] = tradesPerDay.GetValueOrDefault(p.TimeIst.Date) + 1;
 
                 tradesPerSymbolDay[(symbol, p.TimeIst.Date)] =
                     tradesPerSymbolDay.GetValueOrDefault(
@@ -551,7 +590,7 @@ public sealed class ExecutionSimulator
             path = indexMoves.Select(m => m * delta).ToArray();
         }
 
-        var r = _exit.IndexStopPoints(p.Atr) * delta;
+        var r = _exit.IndexStopPoints(p, cfg) * delta;
 
         var local = cfg with
         {

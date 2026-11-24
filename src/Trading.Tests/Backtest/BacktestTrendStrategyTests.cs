@@ -124,8 +124,16 @@ public class BacktestTrendStrategyTests
     }
 
     [Fact]
-    public void ThePutSideIsNotTouchedByTheCallStrategies() =>
-        Assert.False(Eval(Momentum()).Evaluate(BtSupport.PutPoint("NIFTY", T, rsi5: 80), TradeSide.Put).Candidate);
+    public void ThePutSideIsNotTouchedByTheCallStrategies()
+    {
+        // PUT has no RSI condition, so the same point passes with and without the CALL strategy: the strategy must not change it.
+        var put = BtSupport.PutPoint("NIFTY", T, rsi5: 80);
+        var plain = new EntryEvaluator(BtSupport.LiveLike(), BtSupport.Trading(), BtSupport.Instruments(), SelectorMode.Ignore, new EntryRules())
+            .Evaluate(put, TradeSide.Put);
+        var withStrategy = Eval(Momentum()).Evaluate(put, TradeSide.Put);
+        Assert.Equal(plain.Candidate, withStrategy.Candidate);
+        Assert.Equal(plain.Path, withStrategy.Path);
+    }
 
     [Fact]
     public void ASymbolDayTradeCapStopsFurtherEntries()

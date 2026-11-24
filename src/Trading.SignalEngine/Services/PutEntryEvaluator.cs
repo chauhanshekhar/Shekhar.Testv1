@@ -13,7 +13,7 @@ namespace Trading.SignalEngine.Services;
 ///   2 LTP &lt; EMA20               8 Volume &gt; VolumeSMA20  (NOT WIRED - no volume data)
 ///   3 LTP &lt; VWAP  (NOT WIRED - no index volume, so no VWAP)
 ///   4 LTP &lt; Prev 5m Low         9 ATR% >= PutMinAtrPercent
-///   5 RSI PutRsiFloor..Ceiling   10 |PE Delta| in [PutDeltaMinimum(0.35), PutDeltaMaximum(0.65)]
+///   5 (removed: no PUT RSI condition)   10 |PE Delta| in [PutDeltaMinimum(0.35), PutDeltaMaximum(0.65)]
 ///   6 Bearish candle            11 DayChange% &lt; max OR (Fall% > min AND LTP &lt; DayOpen)
 ///                               12 PCR &lt;= PutPcrMaximum (off by default - see condition 12)
 ///
@@ -79,47 +79,6 @@ public class PutEntryEvaluator
                 m.Ltp < m.DayLow - 5m
             ));
         }
-        // 5: RSI
-        if (Enabled("EnableRsiFilter")
-            && Active("PutRsiFloor")
-            && Active("PutRsiCeiling"))
-        {
-            var floor = Threshold("PutRsiFloor", 28m);
-            var ceiling = Threshold("PutRsiCeiling", 40m);
-
-            var passed = m.Rsi >= floor && m.Rsi <= ceiling;
-            var description = $"5 RSI in [{floor},{ceiling}]";
-
-            if (Enabled("EnableRsiPullbackFilter", false)
-                && Active("RsiPutBouncebackFloor")
-                && Active("RsiPutBouncebackCeiling"))
-            {
-                var bouncebackFloor = Threshold("RsiPutBouncebackFloor", 60m);
-                var bouncebackCeiling = Threshold("RsiPutBouncebackCeiling", 70m);
-
-                passed |= m.Rsi >= bouncebackFloor && m.Rsi <= bouncebackCeiling;
-                description += $" or [{bouncebackFloor},{bouncebackCeiling}]";
-            }
-
-            // Optional second PUT band (EnablePutRsiBand2, off by default, per-symbol capable).
-            // Widens the accepted RSI to the union of [floor,ceiling] and [Band2Floor,Band2Ceiling]
-            // without touching the 35-39 gap between them.
-            if (Enabled("EnablePutRsiBand2", false)
-                && Active("PutRsiBand2Floor")
-                && Active("PutRsiBand2Ceiling"))
-            {
-                var band2Floor = Threshold("PutRsiBand2Floor", 40m);
-                var band2Ceiling = Threshold("PutRsiBand2Ceiling", 49m);
-
-                passed |= m.Rsi >= band2Floor && m.Rsi <= band2Ceiling;
-                description += $" or [{band2Floor},{band2Ceiling}]";
-            }
-
-            conditions.Add((
-                $"{description} - was {m.Rsi:F2}",
-                passed));
-        }
-
         // 6 + 7: Bearish candle
         if (Enabled("EnableCandleFilter") && Active("PutBodyPctMinimum"))
         {

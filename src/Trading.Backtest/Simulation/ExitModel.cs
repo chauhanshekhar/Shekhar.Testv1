@@ -18,7 +18,8 @@ public sealed record SymbolExitSettings(
     double Buffer, double MidR, double FinalR,
     double Delta, double EntryPremium, int LotSize, bool T2Partial = false,
     /// <summary>Lots traded for this symbol (live: StrategySettings AdaptiveLotMin per symbol); null = ExitModel.Lots.</summary>
-    int? Lots = null);
+    int? Lots = null,
+    bool Atr5mStop = false, double Atr5mMult = 1.0, double? Target2R = null);
 
 /// <summary>
 /// Everything the exit replay needs. Stop geometry follows AtrRiskService: 1R in index points =
@@ -60,7 +61,12 @@ public sealed record ExitModel(
                 LotSize: lotSizes.TryGetValue(sym, out var l) && l > 0 ? l : 1,
                 // Live ignores EnableT2Partial while the ladder is on, and only acts on 3+ lots.
                 T2Partial: s.GetBool("EnableT2Partial", sym, false) && symLots > 2,
-                Lots: symLots);
+                Lots: symLots,
+                // fix 2: index stop from 5m ATR (SignalEngine/StrategyManager.RiskAtr), read from StrategySettings like live.
+                Atr5mStop: s.GetBool("EnableAtr5mStop", sym, false),
+                Atr5mMult: (double)s.GetDecimal("Atr5mStopMultiplier", sym, 1.0m),
+                // fix 5: Target2RMultiple, honoured only when the row is active and above the T1 multiple (SignalEngineService).
+                Target2R: ResolveTarget2R(s, sym, t));
         }
 
         return new ExitModel(
@@ -71,6 +77,33 @@ public sealed record ExitModel(
 
     /// <summary>1R in index points for an ATR.</summary>
     public double IndexStopPoints(double atr) => Math.Min(Math.Max(atr * StopMult, MinStop), MaxStop);
+
+    /// <summary>
+    /// Index stop in points, same maths as live: with EnableAtr5mStop the risk ATR is 5m ATR x Atr5mStopMultiplier (pre-divided by the
+    /// stop multiplier, which AtrRiskService multiplies back in), then the usual min/max clamp. Falls back to the 1m ATR when the 5m ATR is 0.
+    /// </summary>
+    public double IndexStopPoints(double atr1m, double atr5m, bool useAtr5m, double atr5mMult) =>
+        IndexStopPoints(atr1m, atr5m, useAtr5m, atr5mMult, StopMult, MinStop, MaxStop);
+
+    public static double IndexStopPoints(double atr1m, double atr5m, bool useAtr5m, double atr5mMult, double stopMult, double min, double max)
+    {
+        var mult = stopMult > 0 ? stopMult : 1.5;
+        var riskAtr = useAtr5m && atr5m > 0 ? atr5m * atr5mMult / mult : atr1m;
+        return Math.Min(Math.Max(riskAtr * mult, min), max);
+    }
+
+    public double IndexStopPoints(Trading.Backtest.Data.MarketPoint p, SymbolExitSettings cfg) =>
+        IndexStopPoints(p.Atr, p.Atr5m, cfg.Atr5mStop, cfg.Atr5mMult);
+
+    private static double? ResolveTarget2R(BacktestSettings s, string symbol, TradingSettings t)
+    {
+        if (!s.IsSettingActive("Target2RMultiple", symbol))
+            return null;
+        var stopMult = t.AtrStopLossMultiplier > 0 ? t.AtrStopLossMultiplier : 1.5m;
+        var target1R = t.AtrTarget1Multiplier / stopMult;
+        var configured = s.GetDecimal("Target2RMultiple", symbol, t.AtrTarget2Multiplier / stopMult);
+        return configured > target1R ? (double)configured : null;
+    }
 }
 
 /// <summary>Optional per-order cost; when absent every "after costs" figure is NULL, never silently equal to gross.</summary>

@@ -84,7 +84,7 @@ public class BacktestGapUpProposalTests
     public void TheBankNiftyBreakdownRuleCanNeverOverlapGapUpMode()
     {
         // the rule needs the 5m EMA20 BELOW the 5m EMA50; gap-up mode needs it ABOVE. So blocking the rule in gap-up mode can never remove a trade.
-        var p = BtSupport.PutPoint("BANKNIFTY", T, gap: 40, rsi5: 50) with
+        var p = BtSupport.PutPoint("BANKNIFTY", T, gap: 10, rsi5: 50) with   // gap 10 < 27.5: the chain fails, the rule is the way in
         {
             Rsi1m = 30, DayChangePct = -0.30, AtrPct = 0.04, OpenGapPct = 0.45, Ema20_5m = 100, Ema50_5m = 200,
             MarketState = "Breakdown", TrendDirection = "Bearish",

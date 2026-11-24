@@ -35,6 +35,7 @@ public class SignalWorker : BackgroundService
         new EventBlackoutGate(),
         new StaleDataGate(),
          new ConsecutiveLossGate(),
+        new MaxDailyTradesGate(),      // EnableMaxDailyTradesGate + MaxTradesPerDay; same position as the backtest (after ConsecutiveLossGate, before OnePositionGate)
         new OnePositionGate(),
         new AtrGate(),
         new MarketRegimeGate(),
@@ -51,6 +52,10 @@ public class SignalWorker : BackgroundService
     new EarlyTrendGate(),
     new NoTradeWindowGate(),       // EnableNoTradeWindowGate; same position as the backtest (after EarlyTrendGate)
     new OpeningWarmupGate(),       // EnableOpeningWarmupGate (default off) - no entries before 09:45 while 1m EMAs warm up
+    new Trend5mGate(),             // EnableTrend5mGate + Trend5mGateSide + Trend5mRequirePriceSide - 5m EMA20 vs EMA50 must agree with the side
+    new CloseBreakoutGate(),       // EnableCloseBreakoutGate (default off; per symbol) + CloseBreakoutGateSide (0 both, 1 CALL, 2 PUT)
+    new EfficiencyRatioGate(),     // EnableEfficiencyRatioGate (default off) - blocks choppy 5m markets (same rule the backtest applies)
+    new StopNoiseGate(),           // EnableStopNoiseGate (default off) - blocks stops smaller than the average 5m bar range
     new ChopGate(),
     new FastEmaGate(),
     new SessionTrendGate(),

@@ -26,6 +26,15 @@ public class CloseBreakoutGate : IPostSignalGate
     internal const string EnableKey = "EnableCloseBreakoutGate";
     internal const string LookbackKey = "BreakoutLookbackCandles";
     internal const int DefaultLookback = 5;
+    internal const string SideKey = "CloseBreakoutGateSide";
+    internal const int SideBoth = 0, SideCallOnly = 1, SidePutOnly = 2;
+
+    /// <summary>
+    /// Which signal side the gate applies to: 0 = CALL and PUT (default, the original behaviour), 1 = CALL only, 2 = PUT only.
+    /// Combine with a per-symbol EnableCloseBreakoutGate row to run it, for example, on BANKNIFTY PUT only.
+    /// </summary>
+    internal static bool AppliesTo(int side, bool isCall) =>
+        side == SideBoth || (side == SideCallOnly && isCall) || (side == SidePutOnly && !isCall);
 
     public Task<string?> BlockAsync(SignalContext ctx, MarketSnapshot market, Signal signal, CancellationToken ct)
     {
@@ -36,6 +45,9 @@ public class CloseBreakoutGate : IPostSignalGate
             return Task.FromResult<string?>(null);
 
         var call = signal.SignalType == TradingConst.SignalType.CALL;
+        if (!AppliesTo(ctx.StrategySettings.GetInt(SideKey, ctx.Symbol, SideBoth), call))
+            return Task.FromResult<string?>(null);
+
         var lookback = Math.Max(1, ctx.StrategySettings.GetInt(LookbackKey, ctx.Symbol, DefaultLookback));
 
         return Task.FromResult(Evaluate(market.Candles5m, market.Ltp, lookback, call, ctx.Symbol));

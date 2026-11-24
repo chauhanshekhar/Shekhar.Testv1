@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Trading.Backtest.Data;
+using Trading.Backtest.Indicators;
+using Trading.Backtest.Simulation;
 using Trading.Backtest.Settings;
 using Trading.Domain;
 using Trading.Domain.Entities;
@@ -55,7 +57,6 @@ public sealed record EntryRules
     /// <summary>While the gap trend is active, the CALL 5m RSI ceiling (null = unchanged).</summary>
     public decimal? GapTrendCallRsiCeiling { get; init; }
     /// <summary>While the gap trend is active, the PUT 5m RSI floor (null = unchanged).</summary>
-    public decimal? GapTrendPutRsiFloor { get; init; }
     public bool GapTrendSkipsSidewaysSuppression { get; init; }
     public bool GapTrendSkipsEarlyTrendGate { get; init; }
 
@@ -322,7 +323,6 @@ public sealed class EntryEvaluator
             // the chain evaluated while the gap trend is active: same settings except the experiment's overrides
             var gap = settings.Clone();
             if (_rules.GapTrendCallRsiCeiling is { } c) gap.Set("CallRsiCeiling", null, c);
-            if (_rules.GapTrendPutRsiFloor is { } f) gap.Set("PutRsiFloor", null, f);
             if (_rules.GapTrendWaivesEmaGapFilter) gap.Set("EnableEmaGapFilter", null, 0m);
             _gapEngine = NewEngine(gap, trading, instruments);
         }
@@ -332,10 +332,9 @@ public sealed class EntryEvaluator
         {
             // Same chain, one band swapped. Built once so the per-minute path stays allocation-free.
             var ob = settings.Clone();
-            var floorKey = "PutRsiFloor";
-            var ceilingKey = "PutRsiCeiling";
-            if (_rules.OpeningBandRsiFloor is { } f2) { ob.Set("CallRsiFloor", null, f2); ob.Set(floorKey, null, f2); }
-            if (_rules.OpeningBandRsiCeiling is { } c2) { ob.Set("CallRsiCeiling", null, c2); ob.Set(ceilingKey, null, c2); }
+            // CALL only: PUT has no RSI band any more.
+            if (_rules.OpeningBandRsiFloor is { } f2) ob.Set("CallRsiFloor", null, f2);
+            if (_rules.OpeningBandRsiCeiling is { } c2) ob.Set("CallRsiCeiling", null, c2);
             _openingBandEngine = NewEngine(ob, trading, instruments);
         }
     }
@@ -973,7 +972,74 @@ public sealed class EntryEvaluator
                 return ("SessionTrendGate", $"{reason} ({symbol})");
         }
 
+        // ── 5m filters (fixes 1, 2-guard, 3, 6, 7). Applied purely from the StrategySettings rows: no row / IsActive=0 = not applied,
+        // whether or not the live SignalWorker registers the gate, so every condition can be backtested. Each calls the gate's own Evaluate.
+        if (FiveMinuteGateBlock(p, signalType) is { } five)
+            return five;
+
         return null;
+    }
+
+    private (string By, string Reason)? FiveMinuteGateBlock(MarketPoint p, string signalType)
+    {
+        var symbol = p.Symbol;
+        var isCall = signalType == TradingConst.SignalType.CALL;
+
+        if (_settings.GetBool(OpeningWarmupGate.EnableKey, symbol, false)
+            && OpeningWarmupGate.Evaluate(SessionClock.MinuteOfDayIst(p.TimeUtc),
+                   _settings.GetInt(OpeningWarmupGate.EndKey, symbol, OpeningWarmupGate.DefaultEndMinute)) is { } warm)
+            return ("OpeningWarmupGate", $"{warm} {signalType} ({symbol})");
+
+        if (_settings.GetBool(CloseBreakoutGate.EnableKey, symbol, false)
+            && CloseBreakoutGate.AppliesTo(_settings.GetInt(CloseBreakoutGate.SideKey, symbol, CloseBreakoutGate.SideBoth), isCall))
+        {
+            var lookback = Math.Max(1, _settings.GetInt(CloseBreakoutGate.LookbackKey, symbol, CloseBreakoutGate.DefaultLookback));
+            if (CloseBreakoutGate.Evaluate(Tail5m(p, lookback + 1), (decimal)p.Ltp, lookback, isCall, symbol) is { } brk)
+                return ("CloseBreakoutGate", brk);
+        }
+
+        if (_settings.GetBool(Trend5mGate.EnableKey, symbol, false))
+        {
+            var side = _settings.GetInt(Trend5mGate.SideKey, symbol, Trend5mGate.SideBoth);
+            if (!((side == Trend5mGate.SideCallOnly && !isCall) || (side == Trend5mGate.SidePutOnly && isCall))
+                && Trend5mGate.Evaluate(isCall, (decimal)p.Ema20_5m, (decimal)p.Ema50_5m, (decimal)p.Ltp,
+                       _settings.GetBool(Trend5mGate.PriceSideKey, symbol, false)) is { } trend)
+                return ("Trend5mGate", $"{trend} ({symbol})");
+        }
+
+        if (_settings.GetBool(EfficiencyRatioGate.EnableKey, symbol, false))
+        {
+            var bars = Math.Max(2, _settings.GetInt(EfficiencyRatioGate.BarsKey, symbol, EfficiencyRatioGate.DefaultBars));
+            if (EfficiencyRatioGate.Evaluate(Tail5m(p, bars + 1),  bars,
+                    _settings.GetDecimal(EfficiencyRatioGate.MinKey, symbol, EfficiencyRatioGate.DefaultMin), symbol) is { } er)
+                return ("EfficiencyRatioGate", er);
+        }
+
+        if (_settings.GetBool(StopNoiseGate.EnableKey, symbol, false))
+        {
+            var bars = Math.Max(1, _settings.GetInt(StopNoiseGate.BarsKey, symbol, StopNoiseGate.DefaultBars));
+            var stopPoints = (decimal)ExitModel.IndexStopPoints(p.Atr, p.Atr5m,
+                _settings.GetBool("EnableAtr5mStop", symbol, false),
+                (double)_settings.GetDecimal("Atr5mStopMultiplier", symbol, 1.0m),
+                (double)_trading.AtrStopLossMultiplier, (double)_trading.MinimumIndexStopPoints, (double)_trading.MaximumIndexStopPoints);
+            if (StopNoiseGate.Evaluate(Tail5m(p, bars), stopPoints, bars,
+                    _settings.GetDecimal(StopNoiseGate.RatioKey, symbol, StopNoiseGate.DefaultRatio), symbol) is { } noise)
+                return ("StopNoiseGate", noise);
+        }
+
+        return null;
+    }
+
+    /// <summary>The last <paramref name="count"/> closed 5m bars at the point, oldest first, capped at live's 100-bar window.</summary>
+    private static List<Candle> Tail5m(MarketPoint p, int count)
+    {
+        var list = new List<Candle>();
+        if (p.Bars5m is not { } bars)
+            return list;
+        var n = Math.Min(Math.Min(count, 100), p.Closed5m);
+        for (var i = p.Closed5m - n; i < p.Closed5m; i++)
+            list.Add(MarketSeriesBuilder.ToCandle(p.Symbol, bars[i]));
+        return list;
     }
 
     /// <summary>The row the live rule reads (StrategyManager.BuildRuleSnapshot); MarketState / TrendDirection come from the stored snapshot only.</summary>

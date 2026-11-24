@@ -22,16 +22,11 @@ public class BacktestEntryBoundaryTests
         Assert.Equal(expected, Eval().Evaluate(BtSupport.CallPoint("NIFTY", T, rsi5: rsi5), TradeSide.Call).Candidate);
 
     [Theory]
-    [InlineData(27.99, false)]
-    [InlineData(28.0, true)]
-    [InlineData(38.0, true)]
-    [InlineData(38.01, false)]
-    public void PutRsiBandIsInclusiveOn5mRsi(double rsi5, bool expected) =>
-        Assert.Equal(expected, Eval().Evaluate(BtSupport.PutPoint("NIFTY", T, rsi5: rsi5), TradeSide.Put).Candidate);
-
-    [Fact]
-    public void SecondPutRsiBandIsOff() =>
-        Assert.False(Eval().Evaluate(BtSupport.PutPoint("NIFTY", T, rsi5: 45), TradeSide.Put).Candidate);
+    [InlineData(5.0)]
+    [InlineData(33.0)]
+    [InlineData(95.0)]
+    public void PutHasNoRsiCondition(double rsi5) =>
+        Assert.True(Eval().Evaluate(BtSupport.PutPoint("NIFTY", T, rsi5: rsi5), TradeSide.Put).Candidate);
 
     [Fact]
     public void MissingFiveMinuteRsiFailsClosed()
@@ -130,8 +125,9 @@ public class BacktestEntryBoundaryTests
     }
 
     // ── BANKNIFTY PUT breakdown: a separate eligibility path, evaluated only when the chain produced no signal ──────────
-    private static Trading.Backtest.Data.MarketPoint Breakdown(string symbol = "BANKNIFTY") =>
-        BtSupport.PutPoint(symbol, T, gap: 40, rsi5: 50) with
+    // gap 10 is below the BANKNIFTY EMA-gap threshold (27.5), so the chain fails and the rule is the only way in; the chain has no PUT RSI condition.
+    private static Trading.Backtest.Data.MarketPoint Breakdown(string symbol = "BANKNIFTY", double gap = 10) =>
+        BtSupport.PutPoint(symbol, T, gap: gap, rsi5: 50) with
         {
             Rsi1m = 30, DayChangePct = -0.30, AtrPct = 0.04, Ema20_5m = 100, Ema50_5m = 200,
             MarketState = "Breakdown", TrendDirection = "Bearish",
@@ -148,7 +144,7 @@ public class BacktestEntryBoundaryTests
     [Fact]
     public void WhenTheChainPassesTheRuleIsNotConsulted()
     {
-        var p = Breakdown() with { Rsi5m = 33 };
+        var p = Breakdown(gap: 40);
         Assert.Equal("AND_CHAIN", Eval().Evaluate(p, TradeSide.Put).Path);
     }
 

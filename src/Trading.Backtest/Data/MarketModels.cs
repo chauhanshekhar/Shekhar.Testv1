@@ -31,6 +31,11 @@ public sealed record MarketPoint
     /// <summary>Research only: 1m EMA9 / EMA21 (not stored in IndicatorSnapshots, rebuilt from candles).</summary>
     /// <summary>Research: Wilder ATR(14) of the closed 5m bars (0 until 15 exist).</summary>
     public double Atr5m { get; init; }
+
+    /// <summary>The full 5m bar series the point was built from, and how many of those bars were closed at <see cref="TimeUtc"/>
+    /// (live MarketSnapshot.Candles5m = the last 100 closed bars). Lets the 5m gates read recent bars without copying per point.</summary>
+    public Bar[]? Bars5m { get; init; }
+    public int Closed5m { get; init; }
     public double Ema9 { get; init; }
     public double Ema21 { get; init; }
     public required Bar LastClosedBar { get; init; }

@@ -29,8 +29,14 @@ public sealed record SamplingRules(int KeepEveryNth = 1, int? MaxTradesPerSymbol
 /// </summary>
 public sealed record ExitGeometry(double? StopMult = null, double? T1Mult = null, double? T2Mult = null)
 {
-    public ExitModel ApplyTo(ExitModel live) =>
-        live with { StopMult = StopMult ?? live.StopMult, T1Mult = T1Mult ?? live.T1Mult, T2Mult = T2Mult ?? live.T2Mult };
+    public ExitModel ApplyTo(ExitModel live)
+    {
+        var model = live with { StopMult = StopMult ?? live.StopMult, T1Mult = T1Mult ?? live.T1Mult, T2Mult = T2Mult ?? live.T2Mult };
+        // An explicit T2 multiplier in a research arm replaces the Target2RMultiple row (the row would otherwise win in ExitReplay).
+        return T2Mult is null
+            ? model
+            : model with { Symbols = model.Symbols.ToDictionary(kv => kv.Key, kv => kv.Value with { Target2R = null }, StringComparer.OrdinalIgnoreCase) };
+    }
 }
 
 public sealed record BacktestConfiguration(string Name, TradeSide Side, string Description, IReadOnlyList<SettingChange> Changes, EntryRules? Rules = null, SlotRules? Slots = null, SamplingRules? Sampling = null, ExitGeometry? Exit = null)
@@ -202,9 +208,8 @@ public static class ConfigurationCatalog
             if (call) Add("NoEarlyTrendGate", "early-trend gate off", null, [SettingChange.Set("EnableEarlyTrendGate", 0m)]);
 
             // the gap-trend continuation rule, each part alone, then all together
-            var rsiOnly = call ? new EntryRules { GapTrendContinuation = true, GapTrendCallRsiCeiling = gapExt }
-                               : new EntryRules { GapTrendContinuation = true, GapTrendPutRsiFloor = gapExt };
-            Add("GapTrend:RsiOnly", "gap that keeps going: wider RSI only", rsiOnly);
+            if (call)
+                Add("GapTrend:RsiOnly", "gap that keeps going: wider RSI only", new EntryRules { GapTrendContinuation = true, GapTrendCallRsiCeiling = gapExt });
             Add("GapTrend:SidewaysOnly", "gap that keeps going: no Sideways suppression only", new EntryRules { GapTrendContinuation = true, GapTrendSkipsSidewaysSuppression = true });
             if (call) Add("GapTrend:EarlyTrendOnly", "gap that keeps going: early-trend gate skipped only", new EntryRules { GapTrendContinuation = true, GapTrendSkipsEarlyTrendGate = true });
             Add("GapTrend:EmaGapOnly", "gap that keeps going: EMA-gap rule waived only", new EntryRules { GapTrendContinuation = true, GapTrendWaivesEmaGapFilter = true });
@@ -213,7 +218,6 @@ public static class ConfigurationCatalog
                 {
                     GapTrendContinuation = true,
                     GapTrendCallRsiCeiling = call ? gapExt : null,
-                    GapTrendPutRsiFloor = call ? null : gapExt,
                     GapTrendSkipsSidewaysSuppression = true,
                     GapTrendSkipsEarlyTrendGate = call,
                     GapTrendWaivesEmaGapFilter = true,
@@ -470,24 +474,6 @@ public static class ConfigurationCatalog
         ];
     }
 
-    /// <summary>PUT on gap-up sessions: the live GapUpPutRsiFloor/Ceiling band (40-60) against nearby bands. Only the gap-up override rows change.</summary>
-    public static IReadOnlyList<BacktestConfiguration> BuildGapUpPutBand()
-    {
-        var list = new List<BacktestConfiguration>();
-        void Add(string name, decimal? floor, decimal? ceiling)
-        {
-            var changes = new List<SettingChange>();
-            if (floor is { } f) changes.Add(SettingChange.Set("GapUpPutRsiFloor", f));
-            if (ceiling is { } c) changes.Add(SettingChange.Set("GapUpPutRsiCeiling", c));
-            list.Add(new BacktestConfiguration($"PUT|GapUpBand|{name}", TradeSide.Put, $"gap-up PUT 5m RSI band {name}", changes,
-                new EntryRules { OpeningTypeFilter = OpeningType.GapUp }));
-        }
-        Add("Live40-60", null, null);
-        foreach (var (f, c) in new[] { (45m, 60m), (42m, 60m), (35m, 60m), (40m, 55m), (45m, 55m), (40m, 65m) })
-            Add($"{f:0}-{c:0}", f, c);
-        return list;
-    }
-
     /// <summary>CALL on gap-up sessions: the early-trend gate (blocks CALL once 5m EMA20 is above EMA50) on vs off for BANKNIFTY only and for every symbol.</summary>
     public static IReadOnlyList<BacktestConfiguration> BuildGapUpCallGate()
     {
@@ -694,8 +680,7 @@ public static class ConfigurationCatalog
         SettingChange[] allOff =
         [
             SettingChange.Set("EnableRsiFilter", 0m),
-            SettingChange.Off(side == TradeSide.Call ? "CallRsiFloor" : "PutRsiFloor"),
-            SettingChange.Off(side == TradeSide.Call ? "CallRsiCeiling" : "PutRsiCeiling"),
+            .. (side == TradeSide.Call ? new[] { SettingChange.Off("CallRsiFloor"), SettingChange.Off("CallRsiCeiling") } : []),
             SettingChange.Set(side == TradeSide.Call ? "EnableCallPcrFilter" : "EnablePutPcrFilter", 0m),
             SettingChange.Set("EnableAtrFilter", 0m),
             SettingChange.Set("EnableEmaGapFilter", 0m),
@@ -1001,51 +986,6 @@ public static class ConfigurationCatalog
         return list;
     }
 
-    /// <summary>
-    /// The opening-conditional RSI band (SignalEngineService condition 5). Every arm sets
-    /// EnableOpeningRsiBand explicitly - the live settings may already carry it, and a baseline that
-    /// silently included the feature under test would be worthless.
-    /// </summary>
-    public static IReadOnlyList<BacktestConfiguration> BuildOpeningRsiSweep(TradeSide side)
-    {
-        var tag = side == TradeSide.Call ? "CALL" : "PUT";
-        var call = side == TradeSide.Call;
-        SettingChange Off() => SettingChange.Set("EnableOpeningRsiBand", 0m);
-        SettingChange On() => SettingChange.Set("EnableOpeningRsiBand", 1m);
-
-        List<BacktestConfiguration> list =
-        [
-            new($"{tag}|OpenRsi|Baseline", side, "live band on every session (feature explicitly off)",
-                [Off()], null),
-        ];
-
-        // Candidate gap-up bands. CALL: the live ceiling is 65 and the snapshot drift says RSI >= 70
-        // is the strongest up-move. PUT: the live band is 28-38 and -254/trade on gap-up sessions,
-        // while 45-60 measured +193.
-        var bands = call
-            ? new[] { (45m, 75m), (45m, 85m), (45m, 100m), (55m, 85m) }
-            : new[] { (45m, 60m), (45m, 100m), (40m, 60m), (50m, 70m) };
-
-        foreach (var (lo, hi) in bands)
-            list.Add(new BacktestConfiguration($"{tag}|OpenRsi|GapUp{lo:0}-{hi:0}", side,
-                $"gap-up sessions use {lo:0}-{hi:0}; the live band elsewhere",
-                [On(),
-                 SettingChange.Set(call ? "GapUpCallRsiFloor" : "GapUpPutRsiFloor", lo),
-                 SettingChange.Set(call ? "GapUpCallRsiCeiling" : "GapUpPutRsiCeiling", hi)],
-                null));
-
-        // Control: the same widening applied to EVERY session, to show whether the benefit (if any)
-        // comes from the gap-up scoping or just from a wider band.
-        var (wlo, whi) = call ? (45m, 85m) : (45m, 60m);
-        list.Add(new BacktestConfiguration($"{tag}|OpenRsi|AllSessions{wlo:0}-{whi:0}", side,
-            $"control: {wlo:0}-{whi:0} on EVERY session, not just gap-up",
-            [Off(),
-             SettingChange.Set(call ? "CallRsiFloor" : "PutRsiFloor", wlo),
-             SettingChange.Set(call ? "CallRsiCeiling" : "PutRsiCeiling", whi)],
-            null));
-        return list;
-    }
-
     private static decimal[] RsiFloors(TradeSide s, GridOptions g) => s == TradeSide.Call ? g.CallRsiFloors : g.PutRsiFloors;
     private static decimal[] RsiCeilings(TradeSide s, GridOptions g) => s == TradeSide.Call ? g.CallRsiCeilings : g.PutRsiCeilings;
     private static decimal[] PcrMinimums(TradeSide s, GridOptions g) => s == TradeSide.Call ? g.CallPcrMinimums : g.PutPcrMinimums;
@@ -1109,7 +1049,6 @@ public static class ConfigurationCatalog
         var toggles = new List<(string Name, SettingChange[] Off)>
         {
             ("Rsi", NoRsi(side)),
-            ("OpeningRsi", [SettingChange.Set("EnableOpeningRsiBand", 0m)]),
             ("EmaGap", NoGap()),
             ("Atr", NoAtr()),
             ("Pcr", NoPcr(side)),
@@ -1149,7 +1088,7 @@ public static class ConfigurationCatalog
 
     private static SettingChange[] NoRsi(TradeSide s) => s == TradeSide.Call
         ? [SettingChange.Off("CallRsiFloor"), SettingChange.Off("CallRsiCeiling")]
-        : [SettingChange.Off("PutRsiFloor"), SettingChange.Off("PutRsiCeiling")];
+        : [];   // PUT has no RSI band
 
     private static SettingChange[] NoGap() => [SettingChange.Set("EnableEmaGapFilter", 0m)];
     private static SettingChange[] NoAtr() => [SettingChange.Set("EnableAtrFilter", 0m)];

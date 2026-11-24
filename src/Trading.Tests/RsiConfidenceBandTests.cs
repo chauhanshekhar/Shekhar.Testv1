@@ -81,43 +81,21 @@ public class RsiConfidenceBandTests
         Assert.Equal(Base, Confidence(settings, call: true, rsi: 60m));
     }
 
-    // ── PUT ─────────────────────────────────────────────────────────────────────────────────
+    // ── PUT ─────────────────────────────────────────────────
+    // PUT has no RSI band (PutRsiFloor/PutRsiCeiling were removed), so RSI never changes a PUT's confidence.
 
     [Theory]
-    [InlineData(25, 15)]    // at/below PutRsiFloor
-    [InlineData(35, 8)]     // inside the band
-    [InlineData(45, 0)]     // above PutRsiCeiling (the legacy 55 would have scored +8)
-    public void Put_ScoresAgainstEntryGateBand_NotLegacyKeys(int rsi, int rsiBonus)
+    [InlineData(25)]
+    [InlineData(35)]
+    [InlineData(45)]
+    public void Put_RsiNeverContributesToConfidence(int rsi)
     {
         var settings = new FakeStrategySettingsService()
-            .Set("PutRsiFloor", 28m)
+            .Set("PutRsiFloor", 28m)          // stale rows must be ignored
             .Set("PutRsiCeiling", 40m)
             .Set("RsiPutFloor", 30m)
             .Set("RsiPutCeiling", 55m);
 
-        Assert.Equal(Base + rsiBonus, Confidence(settings, call: false, rsi));
-    }
-
-    [Fact]
-    public void Put_LegacyKeysAlone_ContributeNothing()
-    {
-        var settings = new FakeStrategySettingsService()
-            .Set("RsiPutFloor", 28m)
-            .Set("RsiPutCeiling", 45m);
-
-        Assert.Equal(Base, Confidence(settings, call: false, rsi: 35m));
-    }
-
-    [Fact]
-    public void Put_ConfidenceIsNotTiedToEnableRsiFilter()
-    {
-        // EnableRsiFilter switches the PUT entry condition only; the confidence contribution
-        // follows the band's own IsActive flags.
-        var settings = new FakeStrategySettingsService()
-            .Set("EnableRsiFilter", 0)
-            .Set("PutRsiFloor", 28m)
-            .Set("PutRsiCeiling", 40m);
-
-        Assert.Equal(Base + 8m, Confidence(settings, call: false, rsi: 35m));
+        Assert.Equal(Base, Confidence(settings, call: false, rsi));
     }
 }

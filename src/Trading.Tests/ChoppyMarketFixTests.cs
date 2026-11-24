@@ -196,6 +196,18 @@ public class ChoppyMarketFixTests
         Assert.Single(SignalWorker.PostGates, g => g is StopNoiseGate);
     }
 
+    // ── CloseBreakoutGate side switch (CloseBreakoutGateSide) ─────────────
+
+    [Theory]
+    [InlineData(0, true, true)]
+    [InlineData(0, false, true)]
+    [InlineData(1, true, true)]
+    [InlineData(1, false, false)]
+    [InlineData(2, true, false)]
+    [InlineData(2, false, true)]
+    public void CloseBreakoutGate_SideSwitch(int side, bool isCall, bool applies) =>
+        Assert.Equal(applies, CloseBreakoutGate.AppliesTo(side, isCall));
+
     // ── Fix 4: MaxDailyTradesGate switch ─────────────────────────────────────────────────────
 
     [Fact]
