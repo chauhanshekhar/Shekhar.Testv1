@@ -302,7 +302,8 @@ public class StrategyManager
 
         var result = ctx.Engine.GenerateRuleSignal(
             symbol, match.OptionType!, match.Call, market.Ltp, market.Ema20, market.Ema50, market.PcrValue, market.Rsi,
-            market.CurrentVolume, market.AvgVolume20, market.AtrRaw, market.OptionChain, bar, out _);
+            market.CurrentVolume, market.AvgVolume20, market.AtrRaw, market.OptionChain, bar, out _,
+            RiskAtr(ctx, market, symbol));
 
         if (result.Signal == null)
             return null;
@@ -364,7 +365,8 @@ public class StrategyManager
             market.AtrRaw,
             market.OptionChain,
             triggerCandle,
-            out var confidence);
+            out var confidence,
+            RiskAtr(ctx, market, symbol));
 
         if (result.Signal == null)
         {
@@ -508,6 +510,30 @@ public class StrategyManager
         };
     }
 
+    // ── Fix 2: index stop from 5-minute ATR ──────────────────────────────────────────────────
+    // The index stop was 1.5 x ATR(14) on 1-MINUTE candles (floored at 20 pts), which sits inside one
+    // 5-minute bar's normal swing in a choppy market. With EnableAtr5mStop on, the stop becomes
+    // Atr5mStopMultiplier x ATR(14) on closed 5m bars. AtrRiskService multiplies whatever ATR it is given
+    // by AtrStopLossMultiplier, so the 5m ATR is pre-divided by that multiplier here; the min/max clamp
+    // and the target ratios in AtrRiskService are unchanged. Returns 0 (= keep the 1m ATR, the previous
+    // behaviour) when the flag is off or there are not enough 5m bars.
+    //   EnableAtr5mStop      0/1      (default 0)
+    //   Atr5mStopMultiplier  decimal  (default 1.0)
+    internal static decimal RiskAtr(SignalContext ctx, MarketSnapshot market, string symbol)
+    {
+        if (!ctx.StrategySettings.GetBool("EnableAtr5mStop", symbol, false))
+            return 0m;
+
+        var atr5m = FiveMinuteBars.Atr(market.Candles5m, 14);
+        if (atr5m <= 0m)
+            return 0m;
+
+        var multiplier = ctx.StrategySettings.GetDecimal("Atr5mStopMultiplier", symbol, 1.0m);
+        var stopMultiplier = ctx.Settings.AtrStopLossMultiplier > 0 ? ctx.Settings.AtrStopLossMultiplier : 1.5m;
+
+        return atr5m * multiplier / stopMultiplier;
+    }
+
     // ── Engine runners ────────────────────────────────────────────────────────
     private SignalGenerationResult RunDirectional(
         SignalContext ctx, MarketSnapshot market, string symbol, MarketState marketState)
@@ -533,7 +559,8 @@ public class StrategyManager
             dayChangePct: market.DayChangePct,
             // Entry RSI = 5m RSI(14) on closed bars; null fails the RSI condition closed.
             rsi5m: market.Rsi5m,
-            yesterdayClose: market.YesterdayClose);
+            yesterdayClose: market.YesterdayClose,
+            riskAtr: RiskAtr(ctx, market, symbol));
     }
 
     private async Task<SignalGenerationResult> RunHeroZero(SignalContext ctx, MarketSnapshot market, string symbol)

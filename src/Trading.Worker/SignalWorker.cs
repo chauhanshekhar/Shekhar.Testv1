@@ -50,8 +50,9 @@ public class SignalWorker : BackgroundService
     new StaleEntryGate(),
     new EarlyTrendGate(),
     new NoTradeWindowGate(),       // EnableNoTradeWindowGate; same position as the backtest (after EarlyTrendGate)
+    new OpeningWarmupGate(),       // EnableOpeningWarmupGate (default off) - no entries before 09:45 while 1m EMAs warm up
     new ChopGate(),
-    //new FastEmaGate(),
+    new FastEmaGate(),
     new SessionTrendGate(),
     new CrossIndexAgreementGate(),
     new MarketDirectionGate(),
