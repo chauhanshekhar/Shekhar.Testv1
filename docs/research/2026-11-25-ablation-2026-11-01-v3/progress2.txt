@@ -1,0 +1,12 @@
+off-EnableT2Partial-NIFTY exit=0
+off-EnableTargetLadder exit=0
+off-EnableTrendFilter exit=127
+off-EnableAtrFilter exit=127
+off-EnableIndexStopFloor exit=127
+baseline-end exit=127
+off-EnableTrendFilter exit=0
+off-EnableAtrFilter exit=127
+off-EnableAtrFilter exit=127
+off-EnableAtrFilter exit=0
+off-EnableIndexStopFloor exit=0
+baseline-end exit=0

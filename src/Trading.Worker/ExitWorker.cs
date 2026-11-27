@@ -143,8 +143,26 @@ public class ExitWorker : BackgroundService
         var latestAtrBySymbol = await ExitDataLoader.LoadLatestAtrBySymbolAsync(
             snapshotRepo, openSignals.Select(s => s.Symbol).Distinct().ToList());
 
+        // Audit: store the premium this cycle acts on. Fire-and-forget on purpose — it uses its own DI
+        // scope, never throws, and must not add an INSERT's latency to the exit path. Recorded before
+        // the chain-empty early return below so a cycle that could not price the position is visible too.
+        try
+        {
+            var tickRows = SignalOptionTickRecorder.BuildRows(
+                openSignals, chainBySymbol, liveOptionQuotes, ltpBySymbol, nowIst);
+            _ = SignalOptionTickRecorder.RecordAsync(_scopeFactory, tickRows, _logger);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "SignalOptionTick build failed; exits are unaffected");
+        }
+
         var isForceExit = MarketHours.IsForceExitWindow();
         if (chainBySymbol.Count == 0 && !isForceExit) return;
+
+        // Operator manual-close requests (SystemSettings "ManualClose:{signalId}"). Failure to read
+        // them must never stop the normal exit ladder.
+        var manualCloseIds = await LoadManualCloseRequestsAsync(sp, openSignals, ct);
 
         // Step 4: evaluate each open signal
         foreach (var signal in openSignals)
@@ -170,7 +188,8 @@ public class ExitWorker : BackgroundService
                     trailingStops,
                     stopLossSync,
                     exitDecision,
-                    positionClose);
+                    positionClose,
+                    manualCloseIds.Contains(signal.Id));
             }
             catch (Exception ex)
             {
@@ -212,6 +231,41 @@ public class ExitWorker : BackgroundService
     internal static bool ShouldDeferPaperExit(string status)
         => status == SignalStatus.PartialExitPending;
 
+    internal const string ManualClosePrefix = "ManualClose:";
+
+    /// <summary>
+    /// Pending manual-close requests for the signals open this cycle. Requests whose signal is no
+    /// longer open (already closed) are deleted so a stale key can never fire later. Best-effort:
+    /// any failure returns an empty set and the normal exit ladder runs unchanged.
+    /// </summary>
+    private async Task<HashSet<long>> LoadManualCloseRequestsAsync(
+        IServiceProvider sp, List<Signal> openSignals, CancellationToken ct)
+    {
+        var ids = new HashSet<long>();
+        try
+        {
+            var repo = sp.GetRequiredService<IRepository<SystemSetting>>();
+            var rows = await repo.FindAsync(s => s.Key.StartsWith(ManualClosePrefix));
+            if (rows.Count == 0) return ids;
+
+            var open = openSignals.Select(s => s.Id).ToHashSet();
+            var stale = new List<SystemSetting>();
+            foreach (var row in rows)
+            {
+                if (long.TryParse(row.Key.AsSpan(ManualClosePrefix.Length), out var id) && open.Contains(id))
+                    ids.Add(id);
+                else
+                    stale.Add(row);
+            }
+            if (stale.Count > 0) await repo.DeleteRangeAsync(stale);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "ManualClose request read failed; exits are unaffected");
+        }
+        return ids;
+    }
+
     // ── Evaluate a single signal ─────────────────────────────────────────────
     private async Task EvaluateExit(
         Signal signal,
@@ -232,7 +286,8 @@ public class ExitWorker : BackgroundService
         TrailingStopService trailingStops,
         StopLossSyncService stopLossSync,
         ExitDecisionService exitDecision,
-        PositionCloseService positionClose)
+        PositionCloseService positionClose,
+        bool manualClose = false)
     {
         if (ShouldSkipUnfilledEntry(signal.Status, forceExit))
             return;
@@ -324,7 +379,8 @@ public class ExitWorker : BackgroundService
                 journalRepo,
                 orderRepo,
                 uow,
-                tradeCompletion);
+                tradeCompletion,
+                manualClose);
 
         // save only protection changes
         if (signal.IndexT1Hit != oldIndexT1Hit ||

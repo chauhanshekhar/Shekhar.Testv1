@@ -13,6 +13,7 @@ public class TradingDbContext : DbContext
     public DbSet<MarketTick> MarketTicks => Set<MarketTick>();
     public DbSet<OptionChainData> OptionChainData => Set<OptionChainData>();
     public DbSet<OptionMinuteHistory> OptionMinuteHistory => Set<OptionMinuteHistory>();
+    public DbSet<SignalOptionTick> SignalOptionTicks => Set<SignalOptionTick>();
     public DbSet<PaperTrade> PaperTrades => Set<PaperTrade>();
     public DbSet<Portfolio> Portfolios => Set<Portfolio>();
     public DbSet<Position> Positions => Set<Position>();
@@ -202,6 +203,28 @@ public class TradingDbContext : DbContext
             // Retention delete (WHERE MinuteTime < cutoff)
             e.HasIndex(o => o.MinuteTime)
              .HasDatabaseName("IX_OptionMinuteHistory_MinuteTime");
+        });
+
+        // The premium path ExitWorker acted on, per open signal per cycle (see SignalOptionTick). Analysis only.
+        mb.Entity<SignalOptionTick>(e =>
+        {
+            e.ToTable("SignalOptionTicks");
+            e.Property(t => t.Symbol).HasMaxLength(20).IsRequired();
+            e.Property(t => t.OptionSymbol).HasMaxLength(50).IsRequired();
+            e.Property(t => t.Source).HasMaxLength(10).IsRequired();
+            e.Property(t => t.Status).HasMaxLength(30).IsRequired();
+            e.Property(t => t.OptionLtp).HasPrecision(18, 2);
+            e.Property(t => t.UnderlyingLtp).HasPrecision(18, 2);
+            e.Property(t => t.OptionSL).HasPrecision(18, 2);
+            e.Property(t => t.ProtectedSL).HasPrecision(18, 2);
+
+            // Read pattern: WHERE SignalId=? ORDER BY TickTime
+            e.HasIndex(t => new { t.SignalId, t.TickTime })
+             .HasDatabaseName("IX_SignalOptionTicks_SignalId_TickTime");
+
+            // Retention delete (WHERE TickTime < cutoff)
+            e.HasIndex(t => t.TickTime)
+             .HasDatabaseName("IX_SignalOptionTicks_TickTime");
         });
 
         mb.Entity<DailyPnL>(e =>

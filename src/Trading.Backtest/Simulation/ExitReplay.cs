@@ -11,7 +11,8 @@ public sealed record ReplayResult(
 /// <summary>
 /// Replays one position through the live exit priority (ExitDecisionService conditions 1 to 8, same order) on a path of
 /// premium moves observed at 1-minute closes. P&amp;L is in premium points for the whole position (each lot counts 1 unit);
-/// multiply by the lot size for rupees. Fills at a stop are assumed at the stop level (the broker SL_M owns that exit).
+/// multiply by the lot size for rupees. Fills at a stop are assumed at the stop level (the broker SL_M owns that exit), unless
+/// stopFillAtClose is set (--stop-fill close): then min(stop, the minute close that crossed it).
 ///
 /// What is mirrored, using the live static helpers where they exist so the numbers cannot drift:
 ///   ladder levels (<see cref="ExitDecisionService.LadderLevels"/>), step-lock (<see cref="ExitDecisionService.StepLockLevel"/>),
@@ -25,7 +26,7 @@ public static class ExitReplay
     /// <param name="indexMovePerPremium">index points per premium point (1 / delta) - used for the index-T1 lock</param>
     public static ReplayResult Run(
         IReadOnlyList<double> path, double r, double atr, SymbolExitSettings cfg, ExitModel model, StopModel stopModel,
-        bool isCall = true)
+        bool isCall = true, bool stopFillAtClose = false, IReadOnlyList<double>? lowPath = null, IReadOnlyList<double>? highPath = null)
     {
         var live = stopModel == StopModel.Live;
         var lots = cfg.Lots ?? model.Lots;
@@ -58,13 +59,30 @@ public static class ExitReplay
         {
             var pm = path[step];
             last = pm;
-            if (pm > mfe) mfe = pm;
+            // The peak drives the trailing stop and the step-lock level, and live sees every second, so with an estimated minute high
+            // (--stop-touch low) the peak uses it. Targets and the close-based tests still use the close.
+            var peak = highPath is not null && step < highPath.Count ? Math.Max(pm, highPath[step]) : pm;
+            if (peak > mfe) mfe = peak;
             if (pm < mae) mae = pm;
             var p = entry + pm;
+
+            // The stop as it stood when this minute OPENED. Used by the intra-minute touch test below, so a stop armed or raised by this
+            // minute's own close can never be "hit" by the same minute's low (their order inside the minute is unknown).
+            var stopAtOpen = live && prot is not null ? Math.Max(optSl, prot.Value) : optSl;
 
             // 1. HeroZero safety (premium collapsed below 2)
             if (p > 0 && p < 2)
                 return Done(pnl + open * pm, TradingConst.ExitReason.HeroZero, step);
+
+            // 2b. Research (--stop-touch low): the live ExitWorker checks the stop every second, so a minute whose ESTIMATED low (index bar
+            // low x delta) reached the stop in force at its open was a stop-out even when the minute CLOSED above it. Filled at that stop.
+            if (lowPath is not null && step < lowPath.Count && pm > stopAtOpen && lowPath[step] <= stopAtOpen)
+            {
+                var touchReason = live && prot is not null && prot.Value >= optSl
+                    ? "PROTECTED_SL_HIT"
+                    : TradingConst.ExitReason.ForOptionStop((decimal)(entry + optSl), (decimal)entry);
+                return Done(pnl + open * stopAtOpen, touchReason, step);
+            }
 
             // 3. index T1: no exit, locks a protected stop (never lowers one that is already armed)
             if (live && !indexT1Hit && pm >= indexT1Premium)
@@ -104,7 +122,10 @@ public static class ExitReplay
                 var reason = live && prot is not null && prot.Value >= optSl
                     ? "PROTECTED_SL_HIT"
                     : TradingConst.ExitReason.ForOptionStop((decimal)(entry + optSl), (decimal)entry);
-                return Done(pnl + open * stop, reason, step);
+                // Default: fill at the stop level (the broker SL_M owns the exit). stopFillAtClose: the check runs on a minute close, so a close
+                // already below the stop is the better estimate of the live fill (real PROTECTED_SL_HIT exits filled below the stop on 34 of 36).
+                var fill = stopFillAtClose ? Math.Min(stop, pm) : stop;
+                return Done(pnl + open * fill, reason, step);
             }
 
             // 7L / 8L ladder, otherwise 7 (T2 full exit) and 8 (T1 partial)
@@ -178,6 +199,33 @@ public static class ExitReplay
 
         ReplayResult Done(double total, string reason, int step) =>
             new(total, reason, step, orders + 1, partials, reachedT1, reachedMid, reason == TradingConst.ExitReason.OptionT5Hit, mfe, mae);
+    }
+
+    /// <summary>
+    /// Research only (--fixed-bracket): a plain premium-point bracket instead of the live ladder. Stop at entry - points,
+    /// target at entry + points, FULL exit at either, nothing else (no breakeven arm, step-lock, trailing, index-T1 lock or
+    /// partial sales). Fills are assumed at the level, like the live replay's stop fills; the path is 1-minute closes, so an
+    /// intra-minute touch that reverses by the close is not seen. P&amp;L is per lot counted as 1 unit, like <see cref="Run"/>.
+    /// </summary>
+    public static ReplayResult RunFixedBracket(IReadOnlyList<double> path, double points, int lots, double? targetPoints = null)
+    {
+        var target = targetPoints ?? points;   // --fixed-target: a different target distance than the stop
+        double mfe = 0, mae = 0, last = 0;
+
+        for (var step = 0; step < path.Count; step++)
+        {
+            var pm = path[step];
+            last = pm;
+            mfe = Math.Max(mfe, pm);
+            mae = Math.Min(mae, pm);
+
+            if (pm <= -points)
+                return new(lots * -points, "FIXED_STOP_HIT", step, 2, 0, false, false, false, mfe, mae);
+            if (pm >= target)
+                return new(lots * target, "FIXED_TARGET_HIT", step, 2, 0, true, false, false, mfe, mae);
+        }
+
+        return new(lots * last, TradingConst.ExitReason.ForceExitEod, Math.Max(0, path.Count - 1), 2, 0, false, false, false, mfe, mae);
     }
 
     private static int CeilHalf(int open) => (open + 1) / 2;

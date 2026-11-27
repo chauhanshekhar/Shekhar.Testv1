@@ -193,6 +193,16 @@ internal static class Program
         }
         var trading = LoadTradingSettings();
 
+        // Research only: --t1-mult 0.75 replays with AtrTarget1Multiplier = 0.75 (T1 = 0.75 / AtrStopLossMultiplier R).
+        // Without it the appsettings value is used, exactly as before.
+        if (o.Has("t1-mult"))
+        {
+            trading.AtrTarget1Multiplier = decimal.Parse(o.Get("t1-mult", ""), System.Globalization.CultureInfo.InvariantCulture);
+            Console.WriteLine(
+                $"T1 override: AtrTarget1Multiplier = {trading.AtrTarget1Multiplier} " +
+                $"(= {trading.AtrTarget1Multiplier / trading.AtrStopLossMultiplier:0.00}R at stop multiplier {trading.AtrStopLossMultiplier})");
+        }
+
         // Live trading mode decides the entry trigger candle (Paper: last closed 5m bar, Live: last closed 1m bar,
         // UseOneMinuteEntryCandle overrides). --trading-mode wins over the database row.
         TradingMode? tradingMode = o.Has("trading-mode")
@@ -359,10 +369,31 @@ internal static class Program
             var evaluator = new EntryEvaluator(live, trading, instruments, SelectorMode.Replay,
                 new EntryRules { SkipBreakoutProtection = skipBreakout }, tradingMode);
             var exit = ExitModel.From(live, trading, exitInputs.AvgDelta, exitInputs.AvgPremium, exitInputs.LotSizes);
+            // Research only: --fixed-bracket 30 = stop 30 and target 30 premium points from entry, full exit, no live ladder.
+            double? fixedBracket = o.Has("fixed-bracket")
+                ? double.Parse(o.Get("fixed-bracket", ""), System.Globalization.CultureInfo.InvariantCulture)
+                : null;
+            // --fixed-target 60 keeps the stop at --fixed-bracket points but moves the target to 60.
+            double? fixedTarget = o.Has("fixed-target")
+                ? double.Parse(o.Get("fixed-target", ""), System.Globalization.CultureInfo.InvariantCulture)
+                : null;
+            if (fixedBracket is { } fb)
+                Console.WriteLine($"FIXED BRACKET: stop = entry - {fb}, target = entry + {fixedTarget ?? fb} premium points, full exit (live ladder NOT used).");
+
             var simulator = new ExecutionSimulator(evaluator, live, exit, options, quotes)
             {
                 CrossIndexSymbols = instruments.Select(i => i.Symbol).ToList(),
+                FixedBracketPoints = fixedBracket,
+                FixedTargetPoints = fixedTarget,
             };
+
+            // Research only: --only-symbols SENSEX,BANKNIFTY keeps every symbol's bars (cross-index gate) but only trades these.
+            var onlySymbols = o.Has("only-symbols")
+                ? o.Get("only-symbols", "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase)
+                : null;
+            if (onlySymbols is not null)
+                Console.WriteLine($"Trading only: {string.Join(", ", onlySymbols)}");
             foreach (var sym in ExitModel.SymbolNames)
             {
                 var ec = exit.Symbols[sym];
@@ -373,10 +404,18 @@ internal static class Program
 
             // One open position across every symbol and both sides (OnePositionGate), same-side cooldown after a stop,
             // live stop ladder, real option prices where stored. Warm-up days before --from are not traded.
+            var tradable = SignalParityReport.From(data, fromIst);
+            if (onlySymbols is not null)
+                tradable = tradable.Select(d => onlySymbols.Contains(d.Symbol)
+                    ? d
+                    : new SymbolData { Symbol = d.Symbol, Bars = d.Bars, StrikeInterval = d.StrikeInterval, Points = [] }).ToList();
+
             var run = simulator.Run(
-                SignalParityReport.From(data, fromIst),
+                tradable,
                 new SimulationOptions(TradeSide.Call, StopModel.Live, PremiumMode.OptionHistoryWhereAvailable, RunCosts(o), BothSides: true,
-                    DayRisk: DayRiskLimits.From(trading, tradingMode)));
+                    DayRisk: DayRiskLimits.From(trading, tradingMode),
+                    StopFillAtClose: o.Get("stop-fill", "") == "close",
+                    StopTouchLow: o.Get("stop-touch", "") == "low"));
             SignalParityReport.WriteBacktestTrades(outDir, run.Trades, []);
 
             Console.WriteLine(
@@ -402,7 +441,7 @@ internal static class Program
             // P&L: every replay entry is priced with the grid's exit replay (live stop ladder, real option prices where stored);
             // every real signal with its TradeJournal P&L.
             var parityExit = ExitModel.From(live, trading, exitInputs.AvgDelta, exitInputs.AvgPremium, exitInputs.LotSizes);
-            var paritySimulator = new ExecutionSimulator(parityEvaluator, live, parityExit, options, quotes);
+            var paritySimulator = new ExecutionSimulator(parityEvaluator, live, parityExit, options, quotes) { StopFillAtClose = o.Get("stop-fill", "") == "close", StopTouchLow = o.Get("stop-touch", "") == "low" };
             var livePnl = await loader.LoadLivePnlBySignalAsync(liveSignals.Select(x => x.Id).ToList());
 
             // Only decision minutes from --from onward; the earlier bars were loaded to warm the indicators up.
@@ -430,7 +469,9 @@ internal static class Program
             var cleanRun = paritySimulator.Run(
                 SignalParityReport.From(data, fromIst),
                 new SimulationOptions(TradeSide.Call, StopModel.Live, PremiumMode.OptionHistoryWhereAvailable, RunCosts(o), BothSides: true,
-                    DayRisk: DayRiskLimits.From(trading, tradingMode)));
+                    DayRisk: DayRiskLimits.From(trading, tradingMode),
+                    StopFillAtClose: o.Get("stop-fill", "") == "close",
+                    StopTouchLow: o.Get("stop-touch", "") == "low"));
             SignalParityReport.WriteBacktestTrades(outDir, cleanRun.Trades, liveSignals);
             Console.WriteLine(
                 $"Backtest trades: {cleanRun.Trades.Count} ({cleanRun.Trades.Count(t => t.PnlRs > 0)} win / " +
@@ -439,6 +480,90 @@ internal static class Program
 
             Console.WriteLine(SignalParityReport.Summary(parityRows, header));
             Console.WriteLine($"Wrote {Path.Combine(outDir, "signal-parity.csv")} and signal-parity-summary.md ({parityRows.Count} rows).");
+            return 0;
+        }
+
+        // Tick check (research only, read-only): for live signals the replay also reproduced, did the 1-minute premium path hide a
+        // stop that the per-second SignalOptionTicks path shows was touched? Changes no simulated result.
+        if (o.Has("tick-check"))
+        {
+            var fromIst = from + SessionClock.IstOffset;
+            List<Trading.Domain.Entities.SignalOptionTick> ticks;
+            try
+            {
+                ticks = await loader.LoadSignalOptionTicksAsync(fromIst);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Cannot read SignalOptionTicks ({ex.GetType().Name}). The table is created by docs/add-signal-option-ticks.sql " +
+                                  "(or the AddSignalOptionTicks migration); run it and deploy the Worker first.");
+                return 1;
+            }
+            if (ticks.Count == 0)
+            {
+                Console.WriteLine($"SignalOptionTicks has no rows from {fromIst:yyyy-MM-dd}. Nothing to check until the Worker has recorded a session.");
+                return 0;
+            }
+
+            var liveSignals = await loader.LoadLiveSignalsAsync(fromIst);
+            var liveAudit = await loader.LoadLiveAuditAsync(fromIst);
+            var checkEvaluator = new EntryEvaluator(live, trading, instruments, SelectorMode.Replay,
+                new EntryRules { SkipBreakoutProtection = skipBreakout }, tradingMode);
+            var checkExit = ExitModel.From(live, trading, exitInputs.AvgDelta, exitInputs.AvgPremium, exitInputs.LotSizes);
+            var checkSimulator = new ExecutionSimulator(checkEvaluator, live, checkExit, options, quotes) { StopFillAtClose = o.Get("stop-fill", "") == "close", StopTouchLow = o.Get("stop-touch", "") == "low" };
+            var checkLivePnl = await loader.LoadLivePnlBySignalAsync(liveSignals.Select(x => x.Id).ToList());
+            var checkRows = SignalParityReport.Build(data, checkEvaluator, liveSignals, liveAudit, fromIst, checkSimulator, checkLivePnl);
+
+            var ticksBySignal = ticks.GroupBy(t => t.SignalId).ToDictionary(g => g.Key, g => (IReadOnlyList<Trading.Domain.Entities.SignalOptionTick>)g.ToList());
+            var exits = await loader.LoadSignalExitsAsync(ticksBySignal.Keys.ToList());
+            var results = new List<TickCheckRow>();
+            foreach (var m in checkRows.Where(r => r.Status == "MATCH" && r.LiveSignalId is { } id && ticksBySignal.ContainsKey(id)))
+            {
+                var id = m.LiveSignalId!.Value;
+                var exit = exits.TryGetValue(id, out var e) ? e : ("", (DateTime?)null);
+                results.Add(TickPathCheck.Evaluate(id, m.Symbol, exit.Item1, exit.Item2, m.BacktestExitReason, m.BacktestPnlRs, m.LivePnlRs, ticksBySignal[id]));
+            }
+
+            Directory.CreateDirectory(outDir);
+            File.WriteAllText(Path.Combine(outDir, "tick-check.csv"), TickPathCheck.ToCsv(results));
+            File.WriteAllText(Path.Combine(outDir, "tick-check-summary.md"), TickPathCheck.Summary(results));
+            Console.WriteLine(TickPathCheck.Summary(results));
+            Console.WriteLine($"Wrote {Path.Combine(outDir, "tick-check.csv")} and tick-check-summary.md ({results.Count} rows).");
+            return 0;
+        }
+
+        // Research only: how exposed are StopNoiseGate blocks to a not-yet-final newest 5m bar (live reads stored rows at the signal second)?
+        if (o.Has("bar-lag-check"))
+        {
+            var fromIst = from + SessionClock.IstOffset;
+            var lagLiveSignals = await loader.LoadLiveSignalsAsync(fromIst);
+            var lagLiveAudit = await loader.LoadLiveAuditAsync(fromIst);
+            var lagEvaluator = new EntryEvaluator(live, trading, instruments, SelectorMode.Replay,
+                new EntryRules { SkipBreakoutProtection = skipBreakout }, tradingMode);
+            var lagExit = ExitModel.From(live, trading, exitInputs.AvgDelta, exitInputs.AvgPremium, exitInputs.LotSizes);
+            var lagSimulator = new ExecutionSimulator(lagEvaluator, live, lagExit, options, quotes) { StopFillAtClose = o.Get("stop-fill", "") == "close", StopTouchLow = o.Get("stop-touch", "") == "low" };
+            var lagLivePnl = await loader.LoadLivePnlBySignalAsync(lagLiveSignals.Select(x => x.Id).ToList());
+            var lagRows = SignalParityReport.Build(data, lagEvaluator, lagLiveSignals, lagLiveAudit, fromIst, lagSimulator, lagLivePnl);
+
+            var lagResults = new List<BarLagRow>();
+            foreach (var r in lagRows.Where(r => r.BacktestBlockedBy == "StopNoiseGate"))
+            {
+                var sd = data.FirstOrDefault(d => d.Symbol.Equals(r.Symbol, StringComparison.OrdinalIgnoreCase));
+                var pt = sd?.Points.FirstOrDefault(x => x.TimeIst == r.MinuteIst);
+                if (pt is null) continue;
+                var barsN = Math.Max(1, live.GetInt(Trading.Worker.SignalGates.StopNoiseGate.BarsKey, r.Symbol, Trading.Worker.SignalGates.StopNoiseGate.DefaultBars));
+                var ratio = (double)live.GetDecimal(Trading.Worker.SignalGates.StopNoiseGate.RatioKey, r.Symbol, Trading.Worker.SignalGates.StopNoiseGate.DefaultRatio);
+                var stop = ExitModel.IndexStopPoints(pt.Atr, pt.Atr5m,
+                    live.GetBool("EnableAtr5mStop", r.Symbol, false), (double)live.GetDecimal("Atr5mStopMultiplier", r.Symbol, 1.0m),
+                    (double)trading.AtrStopLossMultiplier, (double)trading.MinimumIndexStopPoints, (double)trading.MaximumIndexStopPoints);
+                lagResults.Add(BarLagCheck.Evaluate(r.Symbol, r.MinuteIst, r.LiveSignalId, r.Status, pt.Bars5m, pt.Closed5m, stop, barsN, ratio));
+            }
+
+            Directory.CreateDirectory(outDir);
+            File.WriteAllText(Path.Combine(outDir, "bar-lag-check.csv"), BarLagCheck.ToCsv(lagResults));
+            File.WriteAllText(Path.Combine(outDir, "bar-lag-check-summary.md"), BarLagCheck.Summary(lagResults));
+            Console.WriteLine(BarLagCheck.Summary(lagResults));
+            Console.WriteLine($"Wrote {Path.Combine(outDir, "bar-lag-check.csv")} and bar-lag-check-summary.md ({lagResults.Count} rows).");
             return 0;
         }
 

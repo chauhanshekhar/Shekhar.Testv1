@@ -38,7 +38,9 @@ public sealed record SimulationOptions(
     int? KeepEveryNth = null,
     bool BothSides = false,
     bool LogSignals = false,
-    DayRiskLimits? DayRisk = null);
+    DayRiskLimits? DayRisk = null,
+    bool StopFillAtClose = false,
+    bool StopTouchLow = false);
 
 /// <summary>
 /// The live day-level stops, replayed when supplied (null = not replayed, the old behaviour):
@@ -120,6 +122,18 @@ public sealed class ExecutionSimulator
 
     /// <summary>Symbols treated as active for CrossIndexAgreementGate (live: IInstrumentCache.GetActive). Null = the gate is not replayed.</summary>
     public IReadOnlyCollection<string>? CrossIndexSymbols { get; init; }
+
+    /// <summary>Research only (--fixed-bracket): stop and target this many premium points from entry, full exit, no live ladder. Null = live exit logic.</summary>
+    public double? FixedBracketPoints { get; init; }
+
+    /// <summary>--stop-fill close: book stop exits at min(stop, the minute close that crossed it). Used by ExecuteAt (signal parity); Run reads it from SimulationOptions.</summary>
+    public bool StopFillAtClose { get; init; }
+
+    /// <summary>--stop-touch low: also test the stop against an estimated minute low (index bar low x delta). Research only; an estimate, not a real quote.</summary>
+    public bool StopTouchLow { get; init; }
+
+    /// <summary>Research only (--fixed-target): target distance when it differs from <see cref="FixedBracketPoints"/> (the stop distance).</summary>
+    public double? FixedTargetPoints { get; init; }
 
     /// <param name="quotes">Real entry quotes from the database for days without OptionMinuteHistory (null = average-premium model).</param>
     public ExecutionSimulator(
@@ -514,7 +528,7 @@ public sealed class ExecutionSimulator
     /// </summary>
     public Trade? ExecuteAt(MarketPoint p, SymbolData d, TradeSide side, string entryPath,
         StopModel stopModel = StopModel.Live, PremiumMode premiumMode = PremiumMode.OptionHistoryWhereAvailable) =>
-        Execute(p, d, new SimulationOptions(side, stopModel, premiumMode, null), side, entryPath);
+        Execute(p, d, new SimulationOptions(side, stopModel, premiumMode, null, StopFillAtClose: StopFillAtClose, StopTouchLow: StopTouchLow), side, entryPath);
 
     private Trade? Execute(
         MarketPoint p,
@@ -530,6 +544,8 @@ public sealed class ExecutionSimulator
         var endUtc = p.TimeUtc.Date + SessionClock.EntryEndUtc;
 
         var indexMoves = new List<double>();
+        var favorableMoves = new List<double>(); // largest index move in favour of the position inside each minute (>= 0)
+        var adverseMoves = new List<double>();   // largest index move against the position inside each minute (>= 0)
         var closeTimes = new List<DateTime>();
 
         for (var q = p.NextBarIndex; q < d.Bars.Length; q++)
@@ -543,6 +559,8 @@ public sealed class ExecutionSimulator
             }
 
             indexMoves.Add(sign * (bar.Close - p.Ltp));
+            favorableMoves.Add(side == TradeSide.Call ? Math.Max(0, bar.High - bar.Close) : Math.Max(0, bar.Close - bar.Low));
+            adverseMoves.Add(side == TradeSide.Call ? Math.Max(0, bar.Close - bar.Low) : Math.Max(0, bar.High - bar.Close));
             closeTimes.Add(bar.OpenUtc.AddMinutes(1));
         }
 
@@ -598,14 +616,19 @@ public sealed class ExecutionSimulator
             EntryPremium = entryPremium
         };
 
-        var replay = ExitReplay.Run(
-            path,
-            r,
-            p.Atr,
-            local,
-            _exit,
-            opt.StopModel,
-            side == TradeSide.Call);
+        var replay = FixedBracketPoints is { } bracket
+            ? ExitReplay.RunFixedBracket(path, bracket, cfg.Lots ?? _exit.Lots, FixedTargetPoints)
+            : ExitReplay.Run(
+                path,
+                r,
+                p.Atr,
+                local,
+                _exit,
+                opt.StopModel,
+                side == TradeSide.Call,
+                opt.StopFillAtClose,
+                opt.StopTouchLow || StopTouchLow ? path.Select((m, i) => m - delta * adverseMoves[i]).ToArray() : null,
+                opt.StopTouchLow || StopTouchLow ? path.Select((m, i) => m + delta * favorableMoves[i]).ToArray() : null);
 
         var pnl = replay.PnlPoints * cfg.LotSize;
 

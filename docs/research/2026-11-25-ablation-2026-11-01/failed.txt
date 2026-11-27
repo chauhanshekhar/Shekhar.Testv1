@@ -1,0 +1,15 @@
+off-EnableCandleFilter
+off-EnableChopGate-BANKNIFTY
+off-EnableChopGate
+off-EnableEmaGapFilter
+off-EnableEarlyCrossCall-BANKNIFTY
+off-EnableCrossIndexAgreementGate
+off-EnablePutPrev5mLowFilter
+off-EnablePutPcrFilter
+off-EnableStaleEntryGate
+off-EnableStepLock
+off-EnableT2Partial
+off-EnableT2Partial-NIFTY
+off-EnableTrendFilter
+off-EnableAtrFilter
+off-EnableTargetLadder

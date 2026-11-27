@@ -25,6 +25,72 @@ public class BacktestExitReplayTests
         Assert.Equal(-40, r.PnlPoints);                      // 4 lots x -10
     }
 
+    private static ReplayResult RunCloseFill(double[] path, SymbolExitSettings cfg) =>
+        ExitReplay.Run(path, r: 10, atr: 20, cfg, Model(4, cfg), StopModel.Live, stopFillAtClose: true);
+
+    [Fact]
+    public void StopFillAtClose_BooksTheCloseThatCrossedTheStop_NotTheStopLevel()
+    {
+        var r = RunCloseFill([8, -1], Cfg());                 // breakeven stop at 0, minute close -1
+        Assert.Equal("PROTECTED_SL_HIT", r.ExitReason);
+        Assert.Equal(-4, r.PnlPoints);                        // 4 lots x -1; the default books 0
+    }
+
+    [Fact]
+    public void StopFillAtClose_CloseExactlyAtTheStop_IsUnchanged()
+    {
+        var r = RunCloseFill([8, 0], Cfg());
+        Assert.Equal("PROTECTED_SL_HIT", r.ExitReason);
+        Assert.Equal(0, r.PnlPoints);
+    }
+
+    [Fact]
+    public void StopFillAtClose_InitialStopGapPastTheStop_BooksTheClose()
+    {
+        var r = RunCloseFill([-5, -12], Cfg());               // stop -10, close -12
+        Assert.Equal("OPTION_SL_HIT", r.ExitReason);
+        Assert.Equal(-48, r.PnlPoints);                       // 4 lots x -12 (default: -40)
+    }
+
+    private static ReplayResult RunLow(double[] path, double[] low, double[]? high = null)
+    {
+        var cfg = Cfg();
+        return ExitReplay.Run(path, r: 10, atr: 20, cfg, Model(4, cfg), StopModel.Live, lowPath: low, highPath: high);
+    }
+
+    [Fact]
+    public void StopTouchLow_MinuteLowReachesTheStopWhileTheCloseStaysAbove_ExitsAtTheStop()
+    {
+        var r = RunLow([-5, -5], [-12, -5]);                  // initial stop -10; close -5, estimated low -12
+        Assert.Equal("OPTION_SL_HIT", r.ExitReason);
+        Assert.Equal(0, r.ExitStep);
+        Assert.Equal(-40, r.PnlPoints);                       // 4 lots x -10, filled at the stop
+    }
+
+    [Fact]
+    public void StopTouchLow_UsesTheStopAsItStoodAtTheMinuteOpen_NotOneArmedByThatMinutesClose()
+    {
+        // close +8 arms the breakeven stop (0); the same minute's low of -1 is above the stop in force at its open (-10): no exit
+        var r = RunLow([8, 8], [-1, 8]);
+        Assert.Equal("FORCE_EXIT_EOD", r.ExitReason);
+    }
+
+    [Fact]
+    public void StopTouchLow_Off_IgnoresTheLow() =>
+        Assert.Equal("FORCE_EXIT_EOD", Run([-5, -5], Cfg()).ExitReason);
+
+    [Fact]
+    public void StopTouchLow_MinuteHighRaisesThePeakForTheStepLock()
+    {
+        var withHigh = RunLow([4, 4, 4], [4, 4, 4], [20, 4, 4]);
+        var without = Run([4, 4, 4], Cfg());
+        Assert.True(withHigh.MaxFavorable > without.MaxFavorable);
+    }
+
+    [Fact]
+    public void StopFillDefault_StillBooksAtTheStopLevel() =>
+        Assert.Equal(0, Run([8, -1], Cfg()).PnlPoints);
+
     [Fact]
     public void BreakevenArmMovesTheStopToEntryInTheLiveModelOnly()
     {

@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Trading.Domain;
 using Trading.Domain.Entities;
 using Trading.SignalEngine.Services;
@@ -40,7 +42,28 @@ public class StopNoiseGate : IPostSignalGate
         var bars = Math.Max(1, ctx.StrategySettings.GetInt(BarsKey, ctx.Symbol, DefaultBars));
         var stopPoints = Math.Abs(signal.EntryPrice - signal.StopLoss);
 
-        return Task.FromResult(Evaluate(market.Candles5m, stopPoints, bars, ratio, ctx.Symbol));
+        var block = Evaluate(market.Candles5m, stopPoints, bars, ratio, ctx.Symbol);
+
+        // One line per evaluation (pass or block) so a backtest/live disagreement can be traced to the bars live actually read.
+        // Logging only: it never changes the decision and never throws.
+        try
+        {
+            var noise = FiveMinuteBars.AverageRange(market.Candles5m, bars);
+            var newest = market.Candles5m.Count > 0 ? market.Candles5m[^1] : null;
+            ctx.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger<StopNoiseGate>().LogInformation(
+                "StopNoiseGate STOP_NOISE_EVAL {Symbol} {SignalType} at {Time:HH:mm:ss.fff} IST: stop={Stop} avgRange={AvgRange} required={Required} " +
+                "newestBarOpenUtc={NewestBar:HH:mm} newestBarRange={NewestRange} bars={Bars} decision={Decision}",
+                ctx.Symbol, signal.SignalType, IstClock.Now, stopPoints.ToString("F2"),
+                noise?.ToString("F2") ?? "n/a", noise is { } n ? (n * ratio).ToString("F2") : "n/a",
+                newest?.CandleTime, newest is null ? "n/a" : (newest.High - newest.Low).ToString("F2"),
+                market.Candles5m.Count, block is null ? "PASS" : "BLOCK");
+        }
+        catch
+        {
+            // diagnostics only
+        }
+
+        return Task.FromResult(block);
     }
 
     /// <summary>Pure decision, exposed for testing. Null = proceed, otherwise the block reason.</summary>

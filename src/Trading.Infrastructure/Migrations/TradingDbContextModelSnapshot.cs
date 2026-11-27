@@ -1402,6 +1402,67 @@ namespace Trading.Infrastructure.Migrations
                     b.ToTable("Signals");
                 });
 
+            modelBuilder.Entity("Trading.Domain.Entities.SignalOptionTick", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<decimal>("OptionLtp")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("OptionSL")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("OptionSymbol")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<decimal>("ProtectedSL")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<long>("SignalId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("Symbol")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<DateTime>("TickTime")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("UnderlyingLtp")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TickTime")
+                        .HasDatabaseName("IX_SignalOptionTicks_TickTime");
+
+                    b.HasIndex("SignalId", "TickTime")
+                        .HasDatabaseName("IX_SignalOptionTicks_SignalId_TickTime");
+
+                    b.ToTable("SignalOptionTicks", (string)null);
+                });
+
             modelBuilder.Entity("Trading.Domain.Entities.SignalOutcome", b =>
                 {
                     b.Property<long>("Id")

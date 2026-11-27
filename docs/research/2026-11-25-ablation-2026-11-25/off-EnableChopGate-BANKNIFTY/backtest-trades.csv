@@ -1,0 +1,8 @@
+Date,EntryIst,ExitIst,Symbol,Side,EntryPath,ExitReason,PremiumSource,EntryPremium,PnlRs,CostRs,NetRs,Result,LiveSignalId
+2026-11-25,10:56,11:28,BANKNIFTY,CALL,AND_CHAIN,PROTECTED_SL_HIT,OptionMinuteHistory,1583.3,+2761.08,+240.00,+2521.08,WIN,
+2026-11-25,14:13,14:41,NIFTY,CALL,AND_CHAIN,OPTION_SL_HIT,IndexDeltaModel,116.35,-4097.68,+560.00,-4657.68,LOSS,
+
+TOTAL 2026-11-25,,,,,2 trades,1 win / 1 loss,,,-1336.60,+800.00,-2136.60,,
+TOTAL BANKNIFTY,,,,,1 trades,1 win / 0 loss,,,+2761.08,+240.00,+2521.08,,
+TOTAL NIFTY,,,,,1 trades,0 win / 1 loss,,,-4097.68,+560.00,-4657.68,,
+TOTAL,,,,,2 trades,1 win / 1 loss,,,-1336.60,+800.00,-2136.60,,

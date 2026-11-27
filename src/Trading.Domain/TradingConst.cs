@@ -78,6 +78,8 @@ public static class TradingConst
         public const string IndexSlHit    = "INDEX_SL_HIT";
         public const string ForceExitEod  = "FORCE_EXIT_EOD";
         public const string HeroZero      = "HERO_ZERO";
+        // Operator-requested close (POST api/admin/signals/{id}/manual-close). Ranks below HeroZero/ForceExit.
+        public const string ManualClose   = "MANUAL_CLOSE";
 
         /// <summary>
         /// Label for an exit at the option stop: <see cref="TrailingSlHit"/> when the stop had been trailed above the entry

@@ -171,7 +171,8 @@ public class ExitDecisionService
         IRepository<TradeJournal> journalRepo,
         IRepository<Order> orderRepo,
         IUnitOfWork uow,
-        TradeCompletionService tradeCompletion)
+        TradeCompletionService tradeCompletion,
+        bool manualClose = false)
     {
         var exitPrice = optionLtp > 0
             ? optionLtp
@@ -198,6 +199,18 @@ public class ExitDecisionService
         {
             return (
                 TradingConst.ExitReason.ForceExitEod,
+                exitPrice);
+        }
+
+        // ================================
+        // 2b. MANUAL CLOSE (operator request)
+        // ================================
+        // Only after the protective exits above; the exit itself still runs the normal
+        // paper/live close path in ExitWorker (no duplicate SELL, journal written there).
+        if (manualClose)
+        {
+            return (
+                TradingConst.ExitReason.ManualClose,
                 exitPrice);
         }
 

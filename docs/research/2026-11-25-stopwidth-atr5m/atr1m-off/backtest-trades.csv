@@ -1,0 +1,6 @@
+Date,EntryIst,ExitIst,Symbol,Side,EntryPath,ExitReason,PremiumSource,EntryPremium,PnlRs,CostRs,NetRs,Result,LiveSignalId,R1OptionPts,ReachedT1
+2026-10-21,09:31,09:46,BANKNIFTY,CALL,AND_CHAIN,PROTECTED_SL_HIT,IndexDeltaModel,574.08,0.00,+160.00,-160.00,LOSS,,31.9902,False
+
+TOTAL 2026-10-21,,,,,1 trades,0 win / 1 loss,,,0.00,+160.00,-160.00,,
+TOTAL BANKNIFTY,,,,,1 trades,0 win / 1 loss,,,0.00,+160.00,-160.00,,
+TOTAL,,,,,1 trades,0 win / 1 loss,,,0.00,+160.00,-160.00,,

@@ -66,7 +66,8 @@ public class ExitDecisionLadderTests
         decimal triggerLtp,
         decimal optionLtp,
         decimal underlyingLtp = NoUnderlyingTrigger,
-        bool forceExit = false) =>
+        bool forceExit = false,
+        bool manualClose = false) =>
         svc.DetermineAsync(
             signal,
             triggerLtp,
@@ -80,7 +81,8 @@ public class ExitDecisionLadderTests
             journalRepo: null!,
             orderRepo: null!,
             uow: null!,
-            tradeCompletion: null!);
+            tradeCompletion: null!,
+            manualClose: manualClose);
 
     private static Signal SingleLeg() => new()
     {
@@ -115,6 +117,25 @@ public class ExitDecisionLadderTests
         var (reason, _) = await Decide(Build(), signal, triggerLtp: 150m, optionLtp: 150m, forceExit: true);
 
         Assert.Equal(TradingConst.ExitReason.ForceExitEod, reason);
+    }
+
+    [Fact]
+    public async Task ManualClose_ExitsWithManualCloseReason_AtTheCurrentPremium()
+    {
+        var (reason, price) = await Decide(Build(), SingleLeg(), triggerLtp: 90m, optionLtp: 90m, manualClose: true);
+
+        Assert.Equal(TradingConst.ExitReason.ManualClose, reason);
+        Assert.Equal(90m, price);
+    }
+
+    [Fact]
+    public async Task ManualClose_DoesNotOutrankHeroZeroOrForceExit()
+    {
+        var (hero, _) = await Decide(Build(), SingleLeg(), triggerLtp: 1.5m, optionLtp: 1.5m, manualClose: true);
+        var (force, _) = await Decide(Build(), SingleLeg(), triggerLtp: 90m, optionLtp: 90m, forceExit: true, manualClose: true);
+
+        Assert.Equal(TradingConst.ExitReason.HeroZero, hero);
+        Assert.Equal(TradingConst.ExitReason.ForceExitEod, force);
     }
 
     [Fact]

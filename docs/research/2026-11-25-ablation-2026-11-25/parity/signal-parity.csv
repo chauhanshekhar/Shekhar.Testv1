@@ -1,0 +1,13 @@
+Status,Symbol,Side,MinuteIst,LiveSignalId,BacktestBlockedBy,BacktestReasonOrPath,LiveBlockedBy,LiveReason,Note,BacktestPnlRs,BacktestExitReason,PremiumSource,LivePnlRs
+MATCH,SENSEX,CALL,2026-11-25 10:56,10449,"","AND_CHAIN","","","live SINGLE/Directional/Breakout status=CLOSED exit=PROTECTED_SL_HIT",+4386.08,"TRAILING_SL_HIT",OptionMinuteHistory,0.00
+BACKTEST_ONLY_STATEFUL,BANKNIFTY,CALL,2026-11-25 10:57,,"","AND_CHAIN","OnePositionGate","Open position exists — new signal suppressed (BANKNIFTY); holding SignalId=10449 SENSEX CALL status=ACTIVE","live cycles in minute=51 anyGenerated=0",+2803.32,"PROTECTED_SL_HIT",OptionMinuteHistory,
+BACKTEST_ONLY_STATEFUL,SENSEX,CALL,2026-11-25 11:01,,"","AND_CHAIN","DuplicateSignalGate","Cooldown active after PROTECTED_SL_HIT","live cycles in minute=48 anyGenerated=0",+2815.60,"TRAILING_SL_HIT",OptionMinuteHistory,
+MATCH,BANKNIFTY,CALL,2026-11-25 11:02,10450,"","AND_CHAIN","","","live SINGLE/Directional/Breakout status=CLOSED exit=PROTECTED_SL_HIT",0.00,"PROTECTED_SL_HIT",OptionMinuteHistory,-237.00
+MATCH,SENSEX,CALL,2026-11-25 11:09,10451,"","AND_CHAIN","","","live SINGLE/Directional/StrongTrend status=CLOSED exit=PROTECTED_SL_HIT",0.00,"PROTECTED_SL_HIT",DbEntryQuoteDeltaModel,-276.00
+BACKTEST_ONLY_STATEFUL,SENSEX,CALL,2026-11-25 11:18,,"","AND_CHAIN","OnePositionGate","Open position exists — new signal suppressed (SENSEX); holding SignalId=10451 SENSEX CALL status=ACTIVE","live cycles in minute=51 anyGenerated=0",-1926.43,"OPTION_SL_HIT",IndexDeltaModel,
+BACKTEST_ONLY_NO_AUDIT,NIFTY,CALL,2026-11-25 14:13,,"","AND_CHAIN","(no audit row)","","",-4097.68,"OPTION_SL_HIT",IndexDeltaModel,
+
+TOTAL_BACKTEST,,,,,"all replay entries: 7 trades, 3 win / 4 loss",,,,,+3980.89,,,
+TOTAL_BACKTEST_EXCL_STATEFUL,,,,,"without entries a live position/cooldown blocked: 4 trades, 1 win / 3 loss",,,,,+288.40,,,
+TOTAL_MATCH,,,,,"signals both took (backtest vs live): 3 trades, 1 win / 2 loss",,,,,+4386.08,,,-513.00
+TOTAL_LIVE,,,,,"real signals (TradeJournal): 3 trades, 0 win / 3 loss",,,,,,,,-513.00
