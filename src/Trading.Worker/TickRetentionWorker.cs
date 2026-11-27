@@ -14,6 +14,7 @@ namespace Trading.Worker;
 ///   - 5m+ Candles:     keep forever
 ///   - OptionChainData: keep 90 days (OI analysis, PCR trend, backtesting, SignalOutcome correlation)
 ///   - OptionMinuteHistory: keep 90 days (per-minute premium/delta history for backtests)
+///   - SignalOptionTicks: keep 90 days (per-second premium path ExitWorker acted on, for exit replay checks)
 /// Uses ExecuteDeleteAsync (single SQL DELETE … WHERE — no rows loaded into memory).
 /// </summary>
 public class TickRetentionWorker : BackgroundService
@@ -71,6 +72,9 @@ public class TickRetentionWorker : BackgroundService
         await optionRepo.ExecuteDeleteAsync(o => o.CreatedOn < optionCutoff);
 
         await optionHistoryRepo.ExecuteDeleteAsync(o => o.MinuteTime < optionCutoff);
+
+        var signalTickRepo = scope.ServiceProvider.GetRequiredService<IRepository<SignalOptionTick>>();
+        await signalTickRepo.ExecuteDeleteAsync(t => t.TickTime < optionCutoff);
     }
 
     private static TimeSpan TimeUntilNextRun()

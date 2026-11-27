@@ -223,6 +223,35 @@ public sealed class HistoricalDataLoader
     }
 
     /// <summary>
+    /// The per-second option path ExitWorker recorded for open signals (SignalOptionTicks), date-filtered so it never reads the
+    /// whole table. Research only (--tick-check). Throws when the table does not exist yet - the caller reports that.
+    /// </summary>
+    public async Task<List<SignalOptionTick>> LoadSignalOptionTicksAsync(DateTime fromIst, CancellationToken ct = default)
+    {
+        await using var db = new TradingDbContext(_options);
+        return await db.SignalOptionTicks
+            .AsNoTracking()
+            .Where(t => t.TickTime >= fromIst)
+            .OrderBy(t => t.SignalId).ThenBy(t => t.TickTime)
+            .ToListAsync(ct);
+    }
+
+    /// <summary>Live exit reason and time per signal id (read-only projection).</summary>
+    public async Task<Dictionary<long, (string Reason, DateTime? Time)>> LoadSignalExitsAsync(IReadOnlyCollection<long> signalIds, CancellationToken ct = default)
+    {
+        if (signalIds.Count == 0)
+            return [];
+        await using var db = new TradingDbContext(_options);
+        var ids = signalIds.ToList();
+        var rows = await db.Signals
+            .AsNoTracking()
+            .Where(s => ids.Contains(s.Id))
+            .Select(s => new { s.Id, s.ExitReason, s.ExitTime })
+            .ToListAsync(ct);
+        return rows.ToDictionary(r => r.Id, r => (r.ExitReason ?? "", r.ExitTime));
+    }
+
+    /// <summary>
     /// What the live audit (IndicatorSnapshots, one row per symbol per SignalWorker cycle) recorded for each symbol-minute:
     /// the most frequent BlockedBy in that minute (empty = a signal was generated or nothing blocked) and whether any
     /// cycle in the minute generated a signal. Aggregated in SQL so per-second rows never reach the process.

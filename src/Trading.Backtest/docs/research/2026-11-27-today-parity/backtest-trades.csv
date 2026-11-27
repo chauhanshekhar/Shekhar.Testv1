@@ -1,0 +1,10 @@
+Date,EntryIst,ExitIst,Symbol,Side,EntryPath,ExitReason,PremiumSource,EntryPremium,PnlRs,CostRs,NetRs,Result,LiveSignalId
+2026-11-27,10:45,10:57,NIFTY,PUT,AND_CHAIN,TRAILING_SL_HIT,OptionMinuteHistory,170.05,+5140.51,+840.00,+4300.51,WIN,
+2026-11-27,11:02,11:10,NIFTY,PUT,AND_CHAIN,OPTION_SL_HIT,OptionMinuteHistory,186.15,-4692.71,+560.00,-5252.71,LOSS,10457
+2026-11-27,11:16,11:27,SENSEX,PUT,AND_CHAIN,PROTECTED_SL_HIT,OptionMinuteHistory,754.95,+2467.64,+180.00,+2287.64,WIN,
+2026-11-27,11:32,11:38,SENSEX,PUT,AND_CHAIN,OPTION_SL_HIT,OptionMinuteHistory,751.75,-2025.60,+120.00,-2145.60,LOSS,
+
+TOTAL 2026-11-27,,,,,4 trades,2 win / 2 loss,,,+889.84,+1700.00,-810.16,,
+TOTAL NIFTY,,,,,2 trades,1 win / 1 loss,,,+447.80,+1400.00,-952.20,,
+TOTAL SENSEX,,,,,2 trades,1 win / 1 loss,,,+442.04,+300.00,+142.04,,
+TOTAL,,,,,4 trades,2 win / 2 loss,,,+889.84,+1700.00,-810.16,,

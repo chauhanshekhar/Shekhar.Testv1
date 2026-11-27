@@ -1,0 +1,2 @@
+SignalId,Symbol,LiveExitReason,LiveExitTime,ReplayExitReason,ReplayPnlRs,LivePnlRs,FirstStopTouch,TouchedStop,QuoteTicks,ChainTicks,Verdict
+10452,NIFTY,PROTECTED_SL_HIT,2026-11-26 10:35:55,FORCE_EXIT_EOD,6347.00,4790.50,2026-11-26 10:35:55,ProtectedSL,976,3,MINUTE_PATH_MISSED_STOP

@@ -1,0 +1,4 @@
+off-EnableTrendFilter done
+off-EnableAtrFilter done
+off-EnableIndexStopFloor done
+baseline-end done

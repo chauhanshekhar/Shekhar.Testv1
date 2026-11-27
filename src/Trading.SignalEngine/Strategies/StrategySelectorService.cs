@@ -151,14 +151,14 @@ public class StrategySelectorService
         switch (ctx.MarketState)
         {
             // StrongTrend disabled
-            case MarketState.StrongTrend:
-                return new StrategyDecision
-                {
-                    Strategy = SelectedStrategy.None,
-                    Priority = 0,
-                    MarketState = ctx.MarketState,
-                    Reason = "StrongTrend disabled"
-                };
+            //case MarketState.StrongTrend:
+            //    return new StrategyDecision
+            //    {
+            //        Strategy = SelectedStrategy.None,
+            //        Priority = 0,
+            //        MarketState = ctx.MarketState,
+            //        Reason = "StrongTrend disabled"
+            //    };
 
             case MarketState.Trend:
                 return await SelectTrendStrategy(ctx);
@@ -166,6 +166,7 @@ public class StrategySelectorService
             case MarketState.Breakout:
             case MarketState.Breakdown:
             case MarketState.Scalping:
+            case MarketState.StrongTrend:
                 return new StrategyDecision
                 {
                     Strategy = SelectedStrategy.Directional,

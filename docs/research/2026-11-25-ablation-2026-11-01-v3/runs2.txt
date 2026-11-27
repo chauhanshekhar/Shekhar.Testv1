@@ -1,0 +1,6 @@
+off-EnableT2Partial-NIFTY|EnableT2Partial=0@NIFTY
+off-EnableTargetLadder|EnableTargetLadder=0
+off-EnableTrendFilter|EnableTrendFilter=0
+off-EnableAtrFilter|EnableAtrFilter=0
+off-EnableIndexStopFloor|EnableIndexStopFloor=0
+baseline-end|

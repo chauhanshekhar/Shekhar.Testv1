@@ -18,6 +18,7 @@ public class AdminController : ControllerBase
     private readonly IRepository<PaperTrade> _paperTrades;
     private readonly IRepository<SystemSetting> _settings;
     private readonly IUnitOfWork _uow;
+    private readonly IRuntimeSettingsService _runtime;
 
     public AdminController(
         IRepository<User> users,
@@ -25,7 +26,8 @@ public class AdminController : ControllerBase
         IRepository<TradeJournal> trades,
         IRepository<PaperTrade> paperTrades,
         IRepository<SystemSetting> settings,
-        IUnitOfWork uow)
+        IUnitOfWork uow,
+        IRuntimeSettingsService runtime)
     {
         _users = users;
         _signals = signals;
@@ -33,6 +35,7 @@ public class AdminController : ControllerBase
         _paperTrades = paperTrades;
         _settings = settings;
         _uow = uow;
+        _runtime = runtime;
     }
 
     [HttpGet("stats")]
@@ -75,6 +78,32 @@ public class AdminController : ControllerBase
         var setting = await _settings.FirstOrDefaultAsync(s => s.Key == "AutoTradingEnabled");
         var enabled = setting == null || !setting.Value.Equals("false", StringComparison.OrdinalIgnoreCase);
         return Ok(new { AutoTradingEnabled = enabled, UpdatedOn = setting?.UpdatedOn });
+    }
+
+    /// <summary>
+    /// POST /api/admin/signals/{id}/manual-close — asks the ExitWorker to close one open PAPER signal.
+    /// Writes only a SystemSettings request row ("ManualClose:{id}"); the ExitWorker performs the close
+    /// through its normal exit path (journal, paper trade, position) on its next 1-second cycle.
+    /// </summary>
+    [HttpPost("signals/{id:long}/manual-close")]
+    public async Task<IActionResult> ManualClose(long id)
+    {
+        if (_runtime.GetTradingMode() != TradingMode.Paper)
+            return BadRequest(new { message = "Manual close is paper-mode only. Square off live positions at the broker." });
+
+        var signal = (await _signals.FindAsync(s => s.Id == id)).FirstOrDefault();
+        if (signal is null)
+            return NotFound(new { message = "Signal not found." });
+        if (signal.Status != SignalStatus.Active)
+            return Conflict(new { message = $"Signal is {signal.Status}; only ACTIVE signals can be closed manually." });
+
+        var key = "ManualClose:" + id;
+        if (await _settings.FirstOrDefaultAsync(s => s.Key == key) is not null)
+            return Ok(new { message = "Manual close already requested.", signalId = id });
+
+        await _settings.StageAsync(new SystemSetting { Key = key, Value = IstClock.Now.ToString("O"), UpdatedOn = IstClock.Now });
+        await _uow.SaveChangesAsync();
+        return Ok(new { message = "Manual close requested; ExitWorker will close it within seconds.", signalId = id, signal.Symbol, signal.OptionSymbol });
     }
 
     /// <summary>POST /api/admin/killswitch?enabled=false — toggle auto-trading on/off</summary>

@@ -1,0 +1,2 @@
+Symbol,MinuteIst,LiveSignalId,LiveOutcome,StopPoints,AvgRange,Required,Shortfall,MaxRequiredDrop,Verdict
+NIFTY,2026-11-26 10:45,10453,LIVE_ONLY,39.12,39.37,39.37,0.24,6.17,FLIP_POSSIBLE
